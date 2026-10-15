@@ -415,6 +415,7 @@ export function ContactsView({
           detail={detail}
           team={team}
           pipelines={pipelines}
+          customFieldDefs={customFieldDefs}
           tab={detailTab}
           setTab={setDetailTab}
           onClose={() => setModal(null)}
@@ -607,6 +608,7 @@ function ContactDetailModal({
   detail,
   team,
   pipelines,
+  customFieldDefs,
   tab,
   setTab,
   onClose,
@@ -615,6 +617,7 @@ function ContactDetailModal({
   detail: Detail | null | "missing";
   team: TeamMemberDTO[];
   pipelines: PipelineDTO[];
+  customFieldDefs: CustomFieldDefinitionDTO[];
   tab: "perfil" | "negocios" | "conversa";
   setTab: (t: "perfil" | "negocios" | "conversa") => void;
   onClose: () => void;
@@ -641,6 +644,12 @@ function ContactDetailModal({
 
   const { contact, opportunities, messages, conversationHidden } = detail;
   const owner = team.find((m) => m.id === contact.ownerId);
+  const opportunityValue = opportunities.reduce((total, opportunity) => total + opportunity.value, 0);
+  const latestMessage = messages[messages.length - 1];
+  const filledCustomFields = customFieldDefs
+    .filter((field) => field.entity === "CONTACT")
+    .map((field) => ({ ...field, value: contact.customFields[field.key] }))
+    .filter((field) => field.value !== undefined && field.value !== null && field.value !== "");
 
   function stageOf(o: OpportunityDTO) {
     for (const p of pipelines) {
@@ -676,6 +685,11 @@ function ContactDetailModal({
 
         {tab === "perfil" && (
           <div className="modal-body">
+            <div className="contact-insights">
+              <div><span>Oportunidades</span><strong>{opportunities.length}</strong></div>
+              <div><span>Valor em negociação</span><strong>{fmtMoney(opportunityValue)}</strong></div>
+              <div><span>Última interação</span><strong>{latestMessage ? fmtDate(latestMessage.time) : "Sem conversa"}</strong></div>
+            </div>
             <div className="info-grid">
               <div className="info-row"><span className="k">Empresa</span><span className="v">{contact.company || "—"}</span></div>
               <div className="info-row"><span className="k">Cliente desde</span><span className="v">{fmtDate(contact.createdAt)}</span></div>
@@ -697,6 +711,19 @@ function ContactDetailModal({
                 {contact.notes || "Sem notas."}
               </div>
             </div>
+            {filledCustomFields.length > 0 && (
+              <div className="field">
+                <label>Informações adicionais</label>
+                <div className="info-grid contact-custom-fields">
+                  {filledCustomFields.map((field) => (
+                    <div key={field.id} className="info-row">
+                      <span className="k">{field.label}</span>
+                      <span className="v">{typeof field.value === "boolean" ? (field.value ? "Sim" : "Não") : String(field.value)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

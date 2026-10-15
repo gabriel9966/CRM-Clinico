@@ -17,6 +17,7 @@ import { fetchAppointments } from "@/app/listings/actions";
 import { EntityPicker } from "@/components/shared/EntityPicker";
 
 type Range = "upcoming" | "past";
+type ScheduleView = "list" | "week";
 
 const STATUS_LABEL: Record<AppointmentDTO["status"], string> = {
   SCHEDULED: "Agendado",
@@ -43,6 +44,17 @@ function dayKey(iso: string) {
   return new Date(iso).toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" });
 }
 
+function startOfWeek(date = new Date()) {
+  const start = new Date(date);
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+  return start;
+}
+
+function sameDay(a: Date, b: Date) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
 export function AppointmentsView({
   initialPage,
   team,
@@ -58,6 +70,7 @@ export function AppointmentsView({
   const router = useRouter();
   const searchParams = useSearchParams();
   const [range, setRange] = useState<Range>("upcoming");
+  const [scheduleView, setScheduleView] = useState<ScheduleView>("list");
   const [appointments, setAppointments] = useState<AppointmentRowDTO[]>(initialPage.items);
   const [nextCursor, setNextCursor] = useState<string | null>(initialPage.nextCursor);
   const [loading, setLoading] = useState(false);
@@ -166,6 +179,12 @@ export function AppointmentsView({
     return id ? team.find((m) => m.id === id) : undefined;
   }
 
+  const weekDays = Array.from({ length: 7 }, (_, index) => {
+    const day = startOfWeek();
+    day.setDate(day.getDate() + index);
+    return day;
+  });
+
   return (
     <>
       <div className="topbar">
@@ -210,12 +229,71 @@ export function AppointmentsView({
               {r === "upcoming" ? "Próximos" : "Anteriores"}
             </div>
           ))}
+          {range === "upcoming" && (
+            <div className="schedule-view-toggle" aria-label="Visualização da agenda">
+              <button
+                type="button"
+                className={scheduleView === "list" ? "active" : ""}
+                aria-pressed={scheduleView === "list"}
+                onClick={() => setScheduleView("list")}
+              >
+                Lista
+              </button>
+              <button
+                type="button"
+                className={scheduleView === "week" ? "active" : ""}
+                aria-pressed={scheduleView === "week"}
+                onClick={() => setScheduleView("week")}
+              >
+                Semana
+              </button>
+            </div>
+          )}
           {loading && <span className="muted" style={{ fontSize: 12 }}>Atualizando…</span>}
         </div>
         {loadError && <p style={{ color: "var(--red)", fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{loadError}</p>}
 
         {appointments.length === 0 ? (
           <div className="empty-state"><Icon.calendar /><div>{loading ? "Carregando…" : "Nenhum agendamento aqui"}</div></div>
+        ) : range === "upcoming" && scheduleView === "week" ? (
+          <section className="week-schedule" aria-label="Agenda da semana atual">
+            {weekDays.map((day) => {
+              const items = appointments
+                .filter((appointment) => sameDay(new Date(appointment.startAt), day))
+                .sort((a, b) => a.startAt.localeCompare(b.startAt));
+              const today = sameDay(day, new Date());
+              return (
+                <div key={day.toISOString()} className={`week-day ${today ? "today" : ""}`}>
+                  <div className="week-day-head">
+                    <span>{day.toLocaleDateString("pt-BR", { weekday: "short" }).replace(".", "")}</span>
+                    <strong>{day.getDate()}</strong>
+                  </div>
+                  <div className="week-day-events">
+                    {items.length === 0 ? (
+                      <span className="week-free">Livre</span>
+                    ) : (
+                      items.map((appointment) => {
+                        const owner = ownerOf(appointment.ownerId);
+                        return (
+                          <button
+                            type="button"
+                            key={appointment.id}
+                            className={`week-event ${appointment.status === "CANCELLED" ? "cancelled" : ""}`}
+                            onClick={() => setModal({ data: appointment })}
+                            style={{ "--event-color": STATUS_COLOR[appointment.status] } as React.CSSProperties}
+                          >
+                            <span>{new Date(appointment.startAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</span>
+                            <strong>{appointment.title}</strong>
+                            <small>{appointment.contactName ?? owner?.name ?? "Sem contato"}</small>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </section>
         ) : (
           [...groups.entries()].map(([day, items]) => (
             <div key={day} className="day-group">

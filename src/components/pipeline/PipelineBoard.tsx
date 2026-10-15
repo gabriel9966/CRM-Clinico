@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Icon } from "@/components/icons";
-import { colorFor, initials, fmtMoney, STAGE_COLORS } from "@/lib/format";
+import { colorFor, initials, fmtDate, fmtMoney, STAGE_COLORS } from "@/lib/format";
 import type { PipelineDTO, DealCardDTO, TeamMemberDTO, CustomFieldDefinitionDTO } from "@/lib/types";
 import { CustomFieldInputs, readCustomFieldValues } from "@/components/shared/CustomFieldInputs";
 import { EntityPicker } from "@/components/shared/EntityPicker";
@@ -344,14 +344,15 @@ export function PipelineBoard({
                             </span>
                             {cname}
                           </div>
-                          {owner && (
-                            <div className="contact-row" style={{ marginTop: 5 }}>
-                              <span className="avatar" style={{ background: owner.color }}>
-                                {initials(owner.name)}
+                          <div className="deal-card-footer">
+                            {owner ? (
+                              <span className="contact-row">
+                                <span className="avatar" style={{ background: owner.color }}>{initials(owner.name)}</span>
+                                <span className="muted">{owner.name}</span>
                               </span>
-                              <span className="muted">{owner.name}</span>
-                            </div>
-                          )}
+                            ) : <span className="muted">Sem responsável</span>}
+                            {deal.expectedClose && <span className="deal-close">Fecha {fmtDate(deal.expectedClose)}</span>}
+                          </div>
                         </div>
                       );
                     })}
@@ -482,6 +483,15 @@ function OpportunityModal({
         </div>
         <form onSubmit={onSubmit}>
           <div className="modal-body">
+            {data && (
+              <div className="opportunity-context">
+                <div>
+                  <span>Contato vinculado</span>
+                  <strong>{data.contactName ?? "Contato"}</strong>
+                </div>
+                <a className="btn small" href={`/contacts?contact=${data.contactId}`}>Abrir ficha</a>
+              </div>
+            )}
             <div className="field">
               <label>Título *</label>
               <input name="title" required defaultValue={data?.title} placeholder="Ex: Plano Pro anual" />

@@ -65,6 +65,9 @@ export function DashboardView({
   const totalWonValue = totals.won.sum;
   const totalLostValue = totals.lost.sum;
   const totalOpenValue = totals.open.sum;
+  const resolvedCount = wonCount + lostCount;
+  const conversionRate = resolvedCount > 0 ? (wonCount / resolvedCount) * 100 : 0;
+  const averageTicket = wonCount > 0 ? totalWonValue / wonCount : 0;
 
   // ---------- Monthly stacked bars (open vs won, by createdAt month) ----------
   const monthly = useMemo(() => {
@@ -131,11 +134,27 @@ export function DashboardView({
       <div className="topbar">
         <div>
           <h1>Dashboard</h1>
-          <div className="sub">Visão geral do seu desempenho e atividades</div>
+          <div className="sub">Receita, conversão e saúde do funil em um só lugar</div>
         </div>
       </div>
 
       <div className="content">
+        <section className="dashboard-hero" aria-label="Resumo do funil">
+          <div>
+            <span className="eyebrow">PANORAMA COMERCIAL</span>
+            <h2>{totalCount > 0 ? `${conversionRate.toFixed(0)}% de conversão` : "Seu funil começa aqui"}</h2>
+            <p>
+              {totalCount > 0
+                ? `${wonCount} negócios ganhos de ${resolvedCount || totalCount} já definidos.`
+                : "Cadastre contatos e oportunidades para acompanhar os indicadores da clínica."}
+            </p>
+          </div>
+          <div className="dashboard-hero-metrics">
+            <div><span>Ticket médio</span><strong>{fmtMoney(averageTicket)}</strong></div>
+            <div><span>Carteira ativa</span><strong>{fmtMoney(totalOpenValue)}</strong></div>
+          </div>
+        </section>
+
         <div className="dash-stats">
           <StatTile
             label="Total negócios"
@@ -319,20 +338,23 @@ function DonutChart({
   const stroke = 22;
   const r = (size - stroke) / 2;
   const circumference = 2 * Math.PI * r;
-  let offsetAcc = 0;
-
   const top = rows.slice(0, 5);
   const topSum = top.reduce((s, r) => s + r.value, 0);
   const otherValue = total - topSum;
 
   const slices = otherValue > 0.01 ? [...top, { id: "__other__", name: "Outros", color: "#cbd1dc", value: otherValue }] : top;
+  const slicesWithOffsets = slices.reduce<Array<(typeof slices)[number] & { offset: number }>>((acc, slice) => {
+    const offset = acc.length === 0 ? 0 : acc[acc.length - 1].offset + (acc[acc.length - 1].value / total) * circumference;
+    acc.push({ ...slice, offset });
+    return acc;
+  }, []);
 
   return (
     <div className="donut-wrap">
       <svg className="donut-svg" width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         <g transform={`rotate(-90 ${size / 2} ${size / 2})`}>
           <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--border-soft)" strokeWidth={stroke} />
-          {slices.map((s) => {
+          {slicesWithOffsets.map((s) => {
             const frac = total > 0 ? s.value / total : 0;
             const dash = frac * circumference;
             const circle = (
@@ -345,13 +367,12 @@ function DonutChart({
                 stroke={s.color}
                 strokeWidth={stroke}
                 strokeDasharray={`${dash} ${circumference - dash}`}
-                strokeDashoffset={-offsetAcc}
+                strokeDashoffset={-s.offset}
                 strokeLinecap="butt"
               >
                 <title>{`${s.name}: ${Math.round(frac * 100)}%`}</title>
               </circle>
             );
-            offsetAcc += dash;
             return circle;
           })}
         </g>

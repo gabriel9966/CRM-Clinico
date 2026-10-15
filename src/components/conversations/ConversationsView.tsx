@@ -3,19 +3,20 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Icon } from "@/components/icons";
-import { colorFor, initials, timeAgo, fmtTime } from "@/lib/format";
+import { colorFor, initials, timeAgo, fmtDate, fmtMoney, fmtTime } from "@/lib/format";
 import type {
   ContactDTO,
   ConversationChannelInfo,
   ConversationRowDTO,
   MessageDTO,
   MessageTemplateDTO,
+  OpportunityDTO,
   Page,
   SendOptionDTO,
   TeamMemberDTO,
 } from "@/lib/types";
 import { sendMessage, fetchSendOptions } from "@/app/conversations/actions";
-import { fetchConversations, fetchThread } from "@/app/listings/actions";
+import { fetchContactDetail, fetchConversations, fetchThread } from "@/app/listings/actions";
 import { reassignContactOwner } from "@/app/contacts/actions";
 import { createMessageTemplate, deleteMessageTemplate } from "@/app/templates/actions";
 
@@ -46,6 +47,13 @@ function ChannelBadge({ channel }: { channel: ConversationChannelInfo }) {
 
 const POLL_MS = 8000;
 const SEARCH_DEBOUNCE_MS = 300;
+
+type CustomerDetail = {
+  contact: ContactDTO;
+  opportunities: OpportunityDTO[];
+  messages: MessageDTO[];
+  conversationHidden: boolean;
+};
 
 // Junta mensagens novas às já carregadas, sem duplicar e em ordem cronológica.
 function mergeMessages(current: MessageDTO[], incoming: MessageDTO[]): MessageDTO[] {
@@ -99,6 +107,9 @@ export function ConversationsView({
   const [sending, setSending] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [manageTemplatesOpen, setManageTemplatesOpen] = useState(false);
+  const [customerPanelOpen, setCustomerPanelOpen] = useState(false);
+  const [customerDetail, setCustomerDetail] = useState<CustomerDetail | null>(null);
+  const [customerDetailLoading, setCustomerDetailLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const listSeq = useRef(0);
@@ -188,6 +199,8 @@ export function ConversationsView({
     setSendOptions([]);
     setChosenConnection("");
     setSendError(null);
+    setCustomerPanelOpen(false);
+    setCustomerDetail(null);
     loadThread(c.id);
     fetchSendOptions(c.id).then((opts) => {
       if (selectedIdRef.current === c.id) setSendOptions(opts); // ignora se já trocou de conversa
@@ -254,6 +267,19 @@ export function ConversationsView({
     if (selectedId) {
       const page = await fetchThread(selectedId);
       if (page) setMessages((prev) => mergeMessages(prev, page.items));
+    }
+  }
+
+  async function openCustomerPanel() {
+    if (!activeContact) return;
+    setCustomerPanelOpen(true);
+    setCustomerDetail(null);
+    setCustomerDetailLoading(true);
+    try {
+      const detail = await fetchContactDetail(activeContact.id);
+      setCustomerDetail(detail);
+    } finally {
+      setCustomerDetailLoading(false);
     }
   }
 
@@ -405,6 +431,7 @@ export function ConversationsView({
                       activeOwner && <span className="muted" style={{ fontSize: 11 }}>Atende: {activeOwner.name}</span>
                     )}
                   </div>
+                  <button type="button" className="btn small" onClick={openCustomerPanel}>Ficha</button>
                 </div>
                 <div className="thread-body" ref={bodyRef}>
                   {olderCursor && (
@@ -529,6 +556,49 @@ export function ConversationsView({
               </>
             )}
           </div>
+          {customerPanelOpen && (
+            <aside className="conversation-context" aria-label="Ficha rápida do contato">
+              <div className="conversation-context-head">
+                <div>
+                  <span>FICHA DO CONTATO</span>
+                  <strong>{activeContact?.name}</strong>
+                </div>
+                <button type="button" className="close-x" onClick={() => setCustomerPanelOpen(false)}><Icon.close /></button>
+              </div>
+              {customerDetailLoading || !customerDetail ? (
+                <div className="thread-empty"><Icon.empty /><div>Carregando ficha…</div></div>
+              ) : (
+                <>
+                  <div className="context-contact-lines">
+                    <a href={customerDetail.contact.email ? `mailto:${customerDetail.contact.email}` : undefined}>{customerDetail.contact.email || "Sem e-mail"}</a>
+                    <a href={customerDetail.contact.phone ? `tel:${customerDetail.contact.phone}` : undefined}>{customerDetail.contact.phone || "Sem telefone"}</a>
+                    <span>Responsável: {ownerOf(customerDetail.contact)?.name ?? "Não definido"}</span>
+                  </div>
+                  <div className="context-tags">
+                    {customerDetail.contact.tags.length ? customerDetail.contact.tags.map((tag) => <span key={tag} className="tag">{tag}</span>) : <span className="muted">Sem tags</span>}
+                  </div>
+                  <div className="context-stat-grid">
+                    <div><span>Oportunidades</span><strong>{customerDetail.opportunities.length}</strong></div>
+                    <div><span>Em negociação</span><strong>{fmtMoney(customerDetail.opportunities.reduce((sum, opportunity) => sum + opportunity.value, 0))}</strong></div>
+                  </div>
+                  <section className="context-section">
+                    <div className="context-section-title">Oportunidades</div>
+                    {customerDetail.opportunities.length === 0 ? <span className="muted">Nenhuma oportunidade cadastrada.</span> : customerDetail.opportunities.slice(0, 4).map((opportunity) => (
+                      <div key={opportunity.id} className="context-opportunity">
+                        <strong>{opportunity.title}</strong>
+                        <span>{fmtMoney(opportunity.value)}{opportunity.expectedClose ? ` · ${fmtDate(opportunity.expectedClose)}` : ""}</span>
+                      </div>
+                    ))}
+                  </section>
+                  <section className="context-section">
+                    <div className="context-section-title">Notas</div>
+                    <p>{customerDetail.contact.notes || "Nenhuma nota cadastrada."}</p>
+                  </section>
+                  <a className="btn primary" href={`/contacts?contact=${customerDetail.contact.id}`}>Abrir ficha completa</a>
+                </>
+              )}
+            </aside>
+          )}
         </div>
       </div>
 
