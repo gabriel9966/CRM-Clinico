@@ -1,4 +1,4 @@
-import { getTeamMembers, getMessageTemplates } from "@/lib/data";
+import { getPipelines, getTeamMembers, getMessageTemplates } from "@/lib/data";
 import { getChannelsFor, getConversationsPage, getMessagesPage } from "@/lib/queries";
 import { requireOrgUser } from "@/lib/auth";
 import { getSendOptions } from "@/lib/messaging";
@@ -10,10 +10,11 @@ export default async function ConversationsPage() {
   // Permissão: ADMIN vê todas as conversas da empresa; MEMBER só vê as dos
   // contatos atribuídos a ele(a) — evita que um atendente leia a conversa
   // de um lead de outro atendente. A regra é aplicada na consulta.
-  const [page, team, templates] = await Promise.all([
+  const [page, team, templates, pipelines] = await Promise.all([
     getConversationsPage(user.organizationId, { restrictToOwnerId: user.role === "ADMIN" ? undefined : user.id }),
     getTeamMembers(user.organizationId),
     getMessageTemplates(user.organizationId),
+    getPipelines(user.organizationId),
   ]);
 
   // Só a primeira página da lista e as mensagens da primeira conversa vêm do
@@ -34,6 +35,7 @@ export default async function ConversationsPage() {
       team={team}
       currentUserRole={user.role}
       templates={templates}
+      pipelines={pipelines}
     />
   );
 }

@@ -64,6 +64,40 @@ export async function createQuickReply(name: string, text: string) {
   revalidatePath("/automations");
 }
 
+/** Atalhos operacionais seguros: criam a automação ativa, mas não enviam
+ * mensagens sem revisão humana. O atendente recebe uma tarefa no CRM. */
+export async function createAutomationRecipe(recipe: "lead_follow_up" | "inbox_task") {
+  const { organizationId } = await requireAdminUser();
+  const leadFollowUp = recipe === "lead_follow_up";
+  const trigger = leadFollowUp ? "CONTACT_CREATED" : "MESSAGE_RECEIVED";
+  const flow: Flow = leadFollowUp
+    ? {
+        nodes: [
+          { id: "trigger", type: "triggerNode", position: { x: 60, y: 160 }, data: { kind: "trigger", label: trigger } },
+          { id: "wait", type: "delayNode", position: { x: 320, y: 160 }, data: { kind: "delay", amount: 1, unit: "days" } },
+          { id: "task", type: "actionNode", position: { x: 580, y: 160 }, data: { kind: "action", actionType: "create_task", config: { title: "Fazer primeiro contato", dueInDays: 0 } } },
+        ],
+        edges: [{ id: "e1", source: "trigger", target: "wait" }, { id: "e2", source: "wait", target: "task" }],
+      }
+    : {
+        nodes: [
+          { id: "trigger", type: "triggerNode", position: { x: 60, y: 160 }, data: { kind: "trigger", label: trigger } },
+          { id: "task", type: "actionNode", position: { x: 360, y: 160 }, data: { kind: "action", actionType: "create_task", config: { title: "Responder mensagem recebida", dueInDays: 0 } } },
+        ],
+        edges: [{ id: "e1", source: "trigger", target: "task" }],
+      };
+
+  await prisma.automation.create({
+    data: {
+      organizationId,
+      name: leadFollowUp ? "Follow-up de novo lead" : "Tarefa para mensagem recebida",
+      trigger: trigger as never,
+      flow: JSON.stringify(flow),
+    },
+  });
+  revalidatePath("/automations");
+}
+
 export async function renameAutomation(id: string, name: string) {
   const { organizationId } = await requireAdminUser();
   await prisma.automation.updateMany({ where: { id, organizationId }, data: { name: name.trim() || "Automação" } });

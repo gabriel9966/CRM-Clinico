@@ -139,6 +139,7 @@ export type OpportunityInput = {
   stageId: string;
   ownerId: string | null;
   expectedClose: string | null;
+  lossReasonId?: string | null;
   customFields?: Record<string, unknown>;
 };
 
@@ -146,7 +147,7 @@ export type OpportunityInput = {
 // um usuário poderia ligar um negócio a um contato, funil ou atendente de OUTRA
 // empresa. Tudo precisa pertencer à organização da sessão.
 async function assertOpportunityRefs(organizationId: string, data: OpportunityInput) {
-  const [contact, stage, owner] = await Promise.all([
+  const [contact, stage, owner, lossReason] = await Promise.all([
     prisma.contact.findFirst({ where: { id: data.contactId, organizationId }, select: { id: true } }),
     prisma.stage.findFirst({
       where: { id: data.stageId, pipelineId: data.pipelineId, pipeline: { organizationId } },
@@ -155,15 +156,20 @@ async function assertOpportunityRefs(organizationId: string, data: OpportunityIn
     data.ownerId
       ? prisma.user.findFirst({ where: { id: data.ownerId, organizationId }, select: { id: true } })
       : Promise.resolve(true),
+    data.lossReasonId
+      ? prisma.lossReason.findFirst({ where: { id: data.lossReasonId, organizationId, active: true }, select: { id: true, name: true } })
+      : Promise.resolve(null),
   ]);
   if (!contact) throw new Error("Contato inválido.");
   if (!stage) throw new Error("Etapa inválida para este pipeline.");
   if (!owner) throw new Error("Responsável inválido.");
+  if (data.lossReasonId && !lossReason) throw new Error("Motivo de perda inválido.");
+  return lossReason;
 }
 
 export async function createOpportunity(data: OpportunityInput) {
   const { organizationId } = await requireOrgUser();
-  await assertOpportunityRefs(organizationId, data);
+  const lossReason = await assertOpportunityRefs(organizationId, data);
   const opp = await prisma.opportunity.create({
     data: {
       organizationId,
@@ -175,6 +181,7 @@ export async function createOpportunity(data: OpportunityInput) {
       stageId: data.stageId,
       ownerId: data.ownerId,
       expectedClose: data.expectedClose ? new Date(data.expectedClose) : null,
+      ...(data.lossReasonId !== undefined ? { lossReasonId: lossReason?.id ?? null, lossReason: lossReason?.name ?? null } : {}),
       customFields: (data.customFields ?? {}) as Prisma.InputJsonValue,
     },
   });
@@ -193,7 +200,7 @@ export async function updateOpportunity(id: string, data: OpportunityInput) {
   const { organizationId } = await requireOrgUser();
   const before = await prisma.opportunity.findFirst({ where: { id, organizationId } });
   if (!before) return;
-  await assertOpportunityRefs(organizationId, data);
+  const lossReason = await assertOpportunityRefs(organizationId, data);
 
   const opp = await prisma.opportunity.update({
     where: { id },
@@ -206,6 +213,7 @@ export async function updateOpportunity(id: string, data: OpportunityInput) {
       stageId: data.stageId,
       ownerId: data.ownerId,
       expectedClose: data.expectedClose ? new Date(data.expectedClose) : null,
+      ...(data.lossReasonId !== undefined ? { lossReasonId: lossReason?.id ?? null, lossReason: lossReason?.name ?? null } : {}),
       customFields: (data.customFields ?? {}) as Prisma.InputJsonValue,
     },
   });

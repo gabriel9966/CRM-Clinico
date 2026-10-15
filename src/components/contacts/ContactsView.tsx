@@ -9,6 +9,7 @@ import type {
   ContactRowDTO,
   OpportunityDTO,
   MessageDTO,
+  ActivityDTO,
   TeamMemberDTO,
   PipelineDTO,
   CustomFieldDefinitionDTO,
@@ -33,6 +34,7 @@ type Detail = {
   contact: ContactDTO;
   opportunities: OpportunityDTO[];
   messages: MessageDTO[];
+  activities: ActivityDTO[];
   conversationHidden: boolean;
 };
 
@@ -75,7 +77,7 @@ export function ContactsView({
     initialContactId ? { type: "detail", contactId: initialContactId } : null
   );
   const [detail, setDetail] = useState<Detail | null | "missing">(null);
-  const [detailTab, setDetailTab] = useState<"perfil" | "negocios" | "conversa">("perfil");
+  const [detailTab, setDetailTab] = useState<"perfil" | "negocios" | "conversa" | "atividade">("perfil");
   const [busy, setBusy] = useState(false);
   const [activeSegment, setActiveSegment] = useState<{ id: string; name: string } | null>(null);
   const [duplicates, setDuplicates] = useState<DuplicateContactGroupDTO[] | null>(null);
@@ -618,8 +620,8 @@ function ContactDetailModal({
   team: TeamMemberDTO[];
   pipelines: PipelineDTO[];
   customFieldDefs: CustomFieldDefinitionDTO[];
-  tab: "perfil" | "negocios" | "conversa";
-  setTab: (t: "perfil" | "negocios" | "conversa") => void;
+  tab: "perfil" | "negocios" | "conversa" | "atividade";
+  setTab: (t: "perfil" | "negocios" | "conversa" | "atividade") => void;
   onClose: () => void;
   onEdit: (c: ContactDTO) => void;
 }) {
@@ -642,7 +644,7 @@ function ContactDetailModal({
     );
   }
 
-  const { contact, opportunities, messages, conversationHidden } = detail;
+  const { contact, opportunities, messages, activities, conversationHidden } = detail;
   const owner = team.find((m) => m.id === contact.ownerId);
   const opportunityValue = opportunities.reduce((total, opportunity) => total + opportunity.value, 0);
   const latestMessage = messages[messages.length - 1];
@@ -681,6 +683,9 @@ function ContactDetailModal({
             Oportunidades ({opportunities.length})
           </button>
           <button className={`tab ${tab === "conversa" ? "active" : ""}`} onClick={() => setTab("conversa")}>Conversa</button>
+          <button className={`tab ${tab === "atividade" ? "active" : ""}`} onClick={() => setTab("atividade")}>
+            Atividades ({activities.length})
+          </button>
         </div>
 
         {tab === "perfil" && (
@@ -779,6 +784,28 @@ function ContactDetailModal({
                 ))}
               </>
             )}
+          </div>
+        )}
+
+        {tab === "atividade" && (
+          <div className="modal-body">
+            {activities.length === 0 ? (
+              <div className="empty-state"><Icon.tasks /><div>Nenhuma atividade planejada para este contato.</div></div>
+            ) : (
+              <div className="contact-timeline">
+                {activities.map((activity) => (
+                  <div key={activity.id} className={`timeline-item ${activity.done ? "done" : ""}`}>
+                    <span className="timeline-dot" />
+                    <div>
+                      <strong>{activity.title}</strong>
+                      <p>{activity.type === "TASK" ? "Tarefa" : activity.type === "CALL" ? "Ligação" : "Reunião"} · {fmtDate(activity.dueAt)} {activity.done ? "· concluída" : "· pendente"}</p>
+                      {activity.notes && <span>{activity.notes}</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <a className="btn small" style={{ marginTop: 14 }} href={`/activities?contact=${contact.id}`}>Gerenciar atividades</a>
           </div>
         )}
       </div>

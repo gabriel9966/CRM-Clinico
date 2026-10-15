@@ -9,6 +9,7 @@ import type {
   ConversationRowDTO,
   DealCardDTO,
   MessageDTO,
+  ActivityDTO,
   OpportunityDTO,
   Page,
 } from "./types";
@@ -176,7 +177,7 @@ export async function getContactDetail(organizationId: string, viewer: Viewer, c
   if (!contact) return null;
 
   const canSeeConversation = viewer.role === "ADMIN" || contact.ownerId === viewer.id;
-  const [opps, msgs] = await Promise.all([
+  const [opps, msgs, activities] = await Promise.all([
     prisma.opportunity.findMany({ where: { organizationId, contactId }, orderBy: { createdAt: "desc" }, take: 100 }),
     canSeeConversation
       ? prisma.message.findMany({
@@ -185,12 +186,31 @@ export async function getContactDetail(organizationId: string, viewer: Viewer, c
           take: 100,
         })
       : Promise.resolve([]),
+    prisma.activity.findMany({
+      where: { organizationId, contactId },
+      orderBy: [{ done: "asc" }, { dueAt: "asc" }],
+      take: 8,
+    }),
   ]);
 
   return {
     contact: toContactDTO(contact),
     opportunities: opps.map(toOpportunityDTO),
     messages: msgs.reverse().map(toMessageDTO),
+    activities: activities.map(
+      (activity): ActivityDTO => ({
+        id: activity.id,
+        type: activity.type,
+        title: activity.title,
+        notes: activity.notes,
+        dueAt: activity.dueAt.toISOString(),
+        done: activity.done,
+        createdAt: activity.createdAt.toISOString(),
+        contactId: activity.contactId,
+        opportunityId: activity.opportunityId,
+        assigneeId: activity.assigneeId,
+      })
+    ),
     conversationHidden: !canSeeConversation,
   };
 }
@@ -539,10 +559,16 @@ export type DashboardAggregates = {
   monthly: { month: string; stageId: string; sum: number }[];
   ownerTotals: { ownerId: string | null; sum: number }[];
   stageSpeed: { stageId: string; avgMs: number; count: number }[];
+  attention: { overdueActivities: number; dueThisWeek: number; inactiveContacts: number };
 };
 
 export async function getDashboardAggregates(organizationId: string): Promise<DashboardAggregates> {
-  const [byStage, byOwner, monthly, speed] = await Promise.all([
+  const now = new Date();
+  const weekEnd = new Date(now);
+  weekEnd.setDate(weekEnd.getDate() + 7);
+  const inactiveSince = new Date(now);
+  inactiveSince.setDate(inactiveSince.getDate() - 2);
+  const [byStage, byOwner, monthly, speed, overdueActivities, dueThisWeek, inactiveContacts] = await Promise.all([
     prisma.opportunity.groupBy({
       by: ["stageId"],
       where: { organizationId },
@@ -565,6 +591,9 @@ export async function getDashboardAggregates(organizationId: string): Promise<Da
       WHERE h."organizationId" = ${organizationId}
         AND h."exitedAt" IS NOT NULL AND h."exitedAt" >= h."enteredAt"
       GROUP BY h."stageId"`,
+    prisma.activity.count({ where: { organizationId, done: false, dueAt: { lt: now } } }),
+    prisma.opportunity.count({ where: { organizationId, expectedClose: { gte: now, lte: weekEnd } } }),
+    prisma.contact.count({ where: { organizationId, lastMessageAt: { not: null, lt: inactiveSince } } }),
   ]);
 
   return {
@@ -572,6 +601,7 @@ export async function getDashboardAggregates(organizationId: string): Promise<Da
     monthly: monthly.map((r) => ({ month: r.month, stageId: r.stageId, sum: Number(r.sum ?? 0) })),
     ownerTotals: byOwner.map((g) => ({ ownerId: g.ownerId, sum: g._sum.value ?? 0 })),
     stageSpeed: speed.map((r) => ({ stageId: r.stageId, avgMs: Number(r.avgMs), count: Number(r.count) })),
+    attention: { overdueActivities, dueThisWeek, inactiveContacts },
   };
 }
 

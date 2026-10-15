@@ -1,16 +1,18 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Icon } from "@/components/icons";
 import { colorFor, initials, timeAgo, fmtDate, fmtMoney, fmtTime } from "@/lib/format";
 import type {
   ContactDTO,
+  ActivityDTO,
   ConversationChannelInfo,
   ConversationRowDTO,
   MessageDTO,
   MessageTemplateDTO,
   OpportunityDTO,
+  PipelineDTO,
   Page,
   SendOptionDTO,
   TeamMemberDTO,
@@ -19,6 +21,8 @@ import { sendMessage, fetchSendOptions } from "@/app/conversations/actions";
 import { fetchContactDetail, fetchConversations, fetchThread } from "@/app/listings/actions";
 import { reassignContactOwner } from "@/app/contacts/actions";
 import { createMessageTemplate, deleteMessageTemplate } from "@/app/templates/actions";
+import { createActivity, type ActivityInput } from "@/app/activities/actions";
+import { createOpportunity } from "@/app/pipeline/actions";
 
 const PROVIDER_LABEL: Record<NonNullable<ConversationChannelInfo>["provider"], string> = {
   WHATSAPP_EVOLUTION: "WhatsApp",
@@ -52,6 +56,7 @@ type CustomerDetail = {
   contact: ContactDTO;
   opportunities: OpportunityDTO[];
   messages: MessageDTO[];
+  activities: ActivityDTO[];
   conversationHidden: boolean;
 };
 
@@ -70,6 +75,7 @@ export function ConversationsView({
   team,
   currentUserRole,
   templates,
+  pipelines,
 }: {
   initialPage: Page<ConversationRowDTO>;
   initialChannels: Record<string, ConversationChannelInfo>;
@@ -80,6 +86,7 @@ export function ConversationsView({
   team: TeamMemberDTO[];
   currentUserRole: "ADMIN" | "MEMBER";
   templates: MessageTemplateDTO[];
+  pipelines: PipelineDTO[];
 }) {
   const router = useRouter();
 
@@ -110,6 +117,8 @@ export function ConversationsView({
   const [customerPanelOpen, setCustomerPanelOpen] = useState(false);
   const [customerDetail, setCustomerDetail] = useState<CustomerDetail | null>(null);
   const [customerDetailLoading, setCustomerDetailLoading] = useState(false);
+  const [quickAction, setQuickAction] = useState<"task" | "opportunity" | null>(null);
+  const [quickActionBusy, setQuickActionBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const listSeq = useRef(0);
@@ -128,6 +137,7 @@ export function ConversationsView({
   const activeContact = activeRow?.contact ?? (selectedContact?.id === selectedId ? selectedContact : null);
   const activeChannel = activeContact ? channels[activeContact.id] ?? null : null;
   const activeOwner = activeContact ? ownerOf(activeContact) : undefined;
+  const defaultPipeline = pipelines[0];
 
   // ── Lista: busca (no servidor) e "carregar mais" ──────────────────────────
   const reloadList = useCallback(
@@ -591,6 +601,19 @@ export function ConversationsView({
                     ))}
                   </section>
                   <section className="context-section">
+                    <div className="context-section-title">Próximas ações</div>
+                    {customerDetail.activities.length === 0 ? <span className="muted">Nenhuma atividade planejada.</span> : customerDetail.activities.slice(0, 3).map((activity) => (
+                      <div key={activity.id} className={`context-activity ${activity.done ? "done" : ""}`}>
+                        <strong>{activity.title}</strong>
+                        <span>{fmtDate(activity.dueAt)} · {activity.done ? "concluída" : "pendente"}</span>
+                      </div>
+                    ))}
+                  </section>
+                  <div className="context-quick-actions">
+                    <button type="button" className="btn small" onClick={() => setQuickAction("task")}>Criar follow-up</button>
+                    <button type="button" className="btn small" onClick={() => setQuickAction("opportunity")}>Nova oportunidade</button>
+                  </div>
+                  <section className="context-section">
                     <div className="context-section-title">Notas</div>
                     <p>{customerDetail.contact.notes || "Nenhuma nota cadastrada."}</p>
                   </section>
@@ -609,7 +632,92 @@ export function ConversationsView({
           onRefresh={() => router.refresh()}
         />
       )}
+      {quickAction && activeContact && (
+        <ConversationQuickActionModal
+          kind={quickAction}
+          contact={activeContact}
+          team={team}
+          pipelines={pipelines}
+          defaultPipeline={defaultPipeline}
+          busy={quickActionBusy}
+          onClose={() => setQuickAction(null)}
+          onSubmit={async (form) => {
+            setQuickActionBusy(true);
+            try {
+              if (quickAction === "task") {
+                await createActivity({
+                  title: String(form.get("title") || ""),
+                  type: String(form.get("type") || "TASK") as ActivityInput["type"],
+                  notes: String(form.get("notes") || ""),
+                  dueAt: new Date(String(form.get("dueAt") || "")).toISOString(),
+                  contactId: activeContact.id,
+                  opportunityId: null,
+                  assigneeId: String(form.get("assigneeId") || "") || activeContact.ownerId || null,
+                });
+              } else {
+                const pipelineId = String(form.get("pipelineId") || "");
+                const pipeline = pipelines.find((item) => item.id === pipelineId);
+                await createOpportunity({
+                  title: String(form.get("title") || ""),
+                  value: Number(form.get("value")) || 0,
+                  tags: String(form.get("tags") || "").split(",").map((tag) => tag.trim()).filter(Boolean),
+                  contactId: activeContact.id,
+                  pipelineId,
+                  stageId: String(form.get("stageId") || pipeline?.stages[0]?.id || ""),
+                  ownerId: String(form.get("assigneeId") || "") || activeContact.ownerId || null,
+                  expectedClose: String(form.get("expectedClose") || "") || null,
+                });
+              }
+              setQuickAction(null);
+              await openCustomerPanel();
+              router.refresh();
+            } finally {
+              setQuickActionBusy(false);
+            }
+          }}
+        />
+      )}
     </>
+  );
+}
+
+function ConversationQuickActionModal({
+  kind, contact, team, pipelines, defaultPipeline, busy, onClose, onSubmit,
+}: {
+  kind: "task" | "opportunity";
+  contact: ContactDTO;
+  team: TeamMemberDTO[];
+  pipelines: PipelineDTO[];
+  defaultPipeline: PipelineDTO | undefined;
+  busy: boolean;
+  onClose: () => void;
+  onSubmit: (form: FormData) => Promise<void>;
+}) {
+  const [pipelineId, setPipelineId] = useState(defaultPipeline?.id ?? "");
+  const pipeline = useMemo(() => pipelines.find((item) => item.id === pipelineId), [pipelines, pipelineId]);
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-head"><h2>{kind === "task" ? "Criar follow-up" : "Nova oportunidade"}</h2><button className="close-x" onClick={onClose}><Icon.close /></button></div>
+        <form onSubmit={async (event) => { event.preventDefault(); await onSubmit(new FormData(event.currentTarget)); }}>
+          <div className="modal-body">
+            <div className="quick-contact"><span className="avatar" style={{ background: colorFor(contact.name) }}>{initials(contact.name)}</span><div><span>Contato</span><strong>{contact.name}</strong></div></div>
+            <div className="field"><label>{kind === "task" ? "Follow-up *" : "Título da oportunidade *"}</label><input name="title" required autoFocus placeholder={kind === "task" ? "Ex: Retomar proposta" : "Ex: Plano anual"} /></div>
+            {kind === "task" ? <>
+              <div className="field-row"><div className="field"><label>Tipo</label><select name="type"><option value="TASK">Tarefa</option><option value="CALL">Ligação</option><option value="MEETING">Reunião</option></select></div><div className="field"><label>Quando *</label><input name="dueAt" type="datetime-local" required /></div></div>
+              <div className="field"><label>Notas</label><textarea name="notes" placeholder="Contexto para o próximo atendimento" /></div>
+            </> : <>
+              <div className="field-row"><div className="field"><label>Valor (R$)</label><input name="value" type="number" min={0} step={1} /></div><div className="field"><label>Previsão</label><input name="expectedClose" type="date" /></div></div>
+              <div className="field"><label>Pipeline</label><select name="pipelineId" value={pipelineId} onChange={(event) => setPipelineId(event.target.value)}>{pipelines.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
+              <div className="field"><label>Etapa</label><select name="stageId">{pipeline?.stages.slice().sort((a, b) => a.order - b.order).map((stage) => <option key={stage.id} value={stage.id}>{stage.label}</option>)}</select></div>
+              <div className="field"><label>Tags</label><input name="tags" placeholder="Urgente, indicação..." /></div>
+            </>}
+            <div className="field"><label>Responsável</label><select name="assigneeId"><option value="">{contact.ownerId ? "Responsável do contato" : "Sem responsável"}</option>{team.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}</select></div>
+          </div>
+          <div className="modal-foot"><button type="button" className="btn" onClick={onClose}>Cancelar</button><button type="submit" className="btn primary" disabled={busy}>{kind === "task" ? "Criar follow-up" : "Criar oportunidade"}</button></div>
+        </form>
+      </div>
+    </div>
   );
 }
 

@@ -6,7 +6,7 @@ import { useState } from "react";
 import { Icon } from "@/components/icons";
 import type { AutomationDTO } from "@/lib/types";
 import { TRIGGER_LABEL } from "@/lib/automation/types";
-import { createAutomation, createQuickReply, toggleAutomation, deleteAutomation } from "@/app/automations/actions";
+import { createAutomation, createAutomationRecipe, createQuickReply, toggleAutomation, deleteAutomation } from "@/app/automations/actions";
 
 export function AutomationsView({ automations }: { automations: AutomationDTO[] }) {
   const router = useRouter();
@@ -40,6 +40,21 @@ export function AutomationsView({ automations }: { automations: AutomationDTO[] 
       </div>
 
       <div className="content">
+        <section className="automation-recipes" aria-label="Automações recomendadas">
+          <div>
+            <span className="eyebrow">COMECE RÁPIDO</span>
+            <h2>Rotinas que evitam leads esquecidos</h2>
+            <p>Crie uma regra pronta e ajuste os detalhes no editor visual quando quiser.</p>
+          </div>
+          <div className="recipe-actions">
+            <button className="recipe-card" onClick={async () => { await createAutomationRecipe("lead_follow_up"); router.refresh(); }}>
+              <Icon.tasks /><span><strong>Follow-up de novo lead</strong><small>Cria uma tarefa após 1 dia</small></span><b>Adicionar</b>
+            </button>
+            <button className="recipe-card" onClick={async () => { await createAutomationRecipe("inbox_task"); router.refresh(); }}>
+              <Icon.chat /><span><strong>Mensagem sem resposta</strong><small>Gera tarefa para o atendente</small></span><b>Adicionar</b>
+            </button>
+          </div>
+        </section>
         {automations.length === 0 ? (
           <div className="empty-state">
             <Icon.zap />

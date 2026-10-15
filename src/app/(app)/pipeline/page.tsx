@@ -1,14 +1,16 @@
 import { getPipelines, getTeamMembers, getCustomFieldDefinitions } from "@/lib/data";
+import { listLossReasons } from "@/lib/crm-catalog";
 import { getPipelineBoard } from "@/lib/queries";
 import { requireOrgUser } from "@/lib/auth";
 import { PipelineBoard } from "@/components/pipeline/PipelineBoard";
 
 export default async function PipelinePage() {
   const { organizationId } = await requireOrgUser();
-  const [pipelines, team, customFieldDefs] = await Promise.all([
+  const [pipelines, team, customFieldDefs, lossReasons] = await Promise.all([
     getPipelines(organizationId),
     getTeamMembers(organizationId),
     getCustomFieldDefinitions(organizationId),
+    listLossReasons(organizationId),
   ]);
 
   // Só o primeiro pipeline vem montado: totais de cada etapa (do banco) + a
@@ -23,6 +25,7 @@ export default async function PipelinePage() {
       initialBoard={board}
       team={team}
       customFieldDefs={customFieldDefs}
+      lossReasons={lossReasons.map((reason) => ({ id: reason.id, name: reason.name }))}
     />
   );
 }

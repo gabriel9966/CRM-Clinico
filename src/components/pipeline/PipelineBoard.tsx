@@ -44,12 +44,14 @@ export function PipelineBoard({
   initialBoard,
   team,
   customFieldDefs,
+  lossReasons,
 }: {
   pipelines: PipelineDTO[];
   initialPipelineId: string;
   initialBoard: Board;
   team: TeamMemberDTO[];
   customFieldDefs: CustomFieldDefinitionDTO[];
+  lossReasons: { id: string; name: string }[];
 }) {
   const router = useRouter();
   const [currentPipelineId, setCurrentPipelineId] = useState(initialPipelineId || pipelines[0]?.id || "");
@@ -190,6 +192,7 @@ export function PipelineBoard({
       stageId: String(fd.get("stageId") || ""),
       ownerId: (String(fd.get("ownerId") || "") || null) as string | null,
       expectedClose: (String(fd.get("expectedClose") || "") || null) as string | null,
+      lossReasonId: fd.has("lossReasonId") ? (String(fd.get("lossReasonId") || "") || null) as string | null : undefined,
       customFields: readCustomFieldValues(fd, customFieldDefs, "OPPORTUNITY"),
     };
     const existing = modal.data;
@@ -353,6 +356,8 @@ export function PipelineBoard({
                             ) : <span className="muted">Sem responsável</span>}
                             {deal.expectedClose && <span className="deal-close">Fecha {fmtDate(deal.expectedClose)}</span>}
                           </div>
+                          {deal.lossReason && <div className="deal-risk lost">Perdido: {deal.lossReason}</div>}
+                          {!deal.lossReason && deal.expectedClose && new Date(deal.expectedClose).getTime() < Date.now() && <div className="deal-risk">Previsão vencida</div>}
                         </div>
                       );
                     })}
@@ -380,6 +385,7 @@ export function PipelineBoard({
           pipelines={pipelines}
           team={team}
           customFieldDefs={customFieldDefs}
+          lossReasons={lossReasons}
           defaultPipelineId={currentPipelineId}
           pendingPipelineId={pendingPipelineId}
           setPendingPipelineId={setPendingPipelineId}
@@ -449,6 +455,7 @@ function OpportunityModal({
   pipelines,
   team,
   customFieldDefs,
+  lossReasons,
   defaultPipelineId,
   pendingPipelineId,
   setPendingPipelineId,
@@ -461,6 +468,7 @@ function OpportunityModal({
   pipelines: PipelineDTO[];
   team: TeamMemberDTO[];
   customFieldDefs: CustomFieldDefinitionDTO[];
+  lossReasons: { id: string; name: string }[];
   defaultPipelineId: string;
   pendingPipelineId: string | null;
   setPendingPipelineId: (id: string) => void;
@@ -552,6 +560,16 @@ function OpportunityModal({
                 <input name="expectedClose" type="date" defaultValue={data?.expectedClose?.slice(0, 10) ?? ""} />
               </div>
             </div>
+            {lossReasons.length > 0 && (
+              <div className="field">
+                <label>Motivo de perda</label>
+                <select name="lossReasonId" defaultValue={lossReasons.find((reason) => reason.name === data?.lossReason)?.id ?? ""}>
+                  <option value="">Não se aplica / negócio em aberto</option>
+                  {lossReasons.map((reason) => <option key={reason.id} value={reason.id}>{reason.name}</option>)}
+                </select>
+                <div className="field-help">Use ao marcar a oportunidade como perdida para manter o relatório comercial confiável.</div>
+              </div>
+            )}
             <CustomFieldInputs definitions={customFieldDefs} entity="OPPORTUNITY" values={data?.customFields ?? {}} />
           </div>
           <div className="modal-foot">

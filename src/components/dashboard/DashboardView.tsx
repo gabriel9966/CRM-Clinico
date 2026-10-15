@@ -12,6 +12,7 @@ export type DashboardData = {
   monthly: { month: string; stageId: string; sum: number }[];
   ownerTotals: { ownerId: string | null; sum: number }[];
   stageSpeed: { stageId: string; avgMs: number; count: number }[];
+  attention: { overdueActivities: number; dueThisWeek: number; inactiveContacts: number };
 };
 
 const MONTH_LABELS = [
@@ -189,6 +190,31 @@ export function DashboardView({
             icon={<Icon.pipeline />}
           />
         </div>
+
+        <section className="attention-center" aria-label="Prioridades comerciais">
+          <div className="attention-copy">
+            <span className="eyebrow">CENTRAL DE PRIORIDADES</span>
+            <h2>O que pede ação agora</h2>
+            <p>Use estes atalhos para destravar negociações e manter os follow-ups em dia.</p>
+          </div>
+          <div className="attention-actions">
+            <a href="/activities" className={`attention-card ${data.attention.overdueActivities ? "urgent" : ""}`}>
+              <span>Tarefas atrasadas</span>
+              <strong>{data.attention.overdueActivities}</strong>
+              <small>Ver follow-ups</small>
+            </a>
+            <a href="/pipeline" className="attention-card">
+              <span>Fechamentos em 7 dias</span>
+              <strong>{data.attention.dueThisWeek}</strong>
+              <small>Revisar previsões</small>
+            </a>
+            <a href="/conversations" className="attention-card">
+              <span>Contatos sem interação</span>
+              <strong>{data.attention.inactiveContacts}</strong>
+              <small>Retomar conversas</small>
+            </a>
+          </div>
+        </section>
 
         <div className="charts-row">
           <div className="chart-card">
