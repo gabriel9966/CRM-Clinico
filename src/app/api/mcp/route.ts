@@ -148,10 +148,10 @@ function buildServer(organizationId: string) {
     {
       title: "Enviar mensagem",
       description:
-        "Envia uma mensagem para um contato. Se o contato tiver um canal real conectado (WhatsApp/Instagram), envia de verdade; senão só registra no CRM.",
-      inputSchema: { contactId: z.string(), text: z.string() },
+        "Envia uma mensagem para um contato por um canal real (WhatsApp, Instagram ou e-mail). Sem canal conectado devolve o motivo (sem_canal, canal_desconectado, escolha_canal…) e NÃO registra nada como enviado. Se o contato puder ser atendido por mais de um canal, informe connectionId.",
+      inputSchema: { contactId: z.string(), text: z.string(), connectionId: z.string().optional() },
     },
-    async ({ contactId, text: msg }) => text(await mcpSendMessage(organizationId, contactId, msg))
+    async ({ contactId, text: msg, connectionId }) => text(await mcpSendMessage(organizationId, contactId, msg, connectionId))
   );
 
   // ── Agenda clínica ───────────────────────────────────────────────────────

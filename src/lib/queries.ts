@@ -195,7 +195,7 @@ export async function getContactDetail(organizationId: string, viewer: Viewer, c
   };
 }
 
-function toMessageDTO(m: { id: string; text: string; direction: string; time: Date; contactId: string; senderId: string | null }): MessageDTO {
+function toMessageDTO(m: { id: string; text: string; direction: string; time: Date; contactId: string; senderId: string | null; status: string }): MessageDTO {
   return {
     id: m.id,
     text: m.text,
@@ -203,6 +203,7 @@ function toMessageDTO(m: { id: string; text: string; direction: string; time: Da
     time: m.time.toISOString(),
     contactId: m.contactId,
     senderId: m.senderId,
+    status: m.status,
   };
 }
 

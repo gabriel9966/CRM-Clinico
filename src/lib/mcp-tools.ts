@@ -1,13 +1,9 @@
 import "server-only";
 import { prisma } from "./prisma";
-import { decryptJson } from "./crypto";
 import { audit } from "./audit";
-import { createMessage } from "./messages";
+import { sendContactMessage } from "./messaging";
 import { AppError } from "./errors";
 import { softDeleteContacts, softDeleteOpportunity } from "./soft-delete";
-import * as evolution from "./providers/evolution";
-import * as instagram from "./providers/instagram";
-import * as email from "./providers/email";
 
 function parseTags(raw: string): string[] {
   try {
@@ -390,41 +386,17 @@ export async function mcpListTeam(organizationId: string) {
   return team;
 }
 
-export async function mcpSendMessage(organizationId: string, contactId: string, text: string) {
-  const trimmed = text.trim();
-  if (!trimmed) return { ok: false, error: "texto vazio" };
-
-  const contact = await prisma.contact.findFirst({ where: { id: contactId, organizationId } });
-  if (!contact) return { ok: false, error: "contato não encontrado nesta organização" };
-
-  const channel = await prisma.contactChannel.findFirst({
-    where: { contactId },
-    include: { connection: true },
-    orderBy: { createdAt: "desc" },
-  });
-
-  let status: "sent" | "failed" = "sent";
-  let connectionId: string | null = null;
-
-  if (channel && channel.connection.status === "CONNECTED") {
-    connectionId = channel.connectionId;
-    try {
-      if (channel.connection.provider === "WHATSAPP_EVOLUTION") {
-        const config = decryptJson<evolution.EvolutionConfig>(channel.connection.config);
-        await evolution.sendText(config, channel.externalId, trimmed);
-      } else if (channel.connection.provider === "INSTAGRAM") {
-        const config = decryptJson<instagram.InstagramConfig>(channel.connection.config);
-        await instagram.sendText(config, channel.externalId, trimmed);
-      } else if (channel.connection.provider === "EMAIL") {
-        const config = decryptJson<email.EmailConfig>(channel.connection.config);
-        await email.sendText(config, channel.externalId, trimmed);
-      }
-    } catch {
-      status = "failed";
-    }
-  }
-
-  await createMessage(prisma, { organizationId, contactId, text: trimmed, direction: "out", connectionId, status });
-
-  return { ok: status === "sent", usedRealChannel: Boolean(connectionId), status };
+// Envia uma mensagem por um canal real (WhatsApp/Instagram/e-mail). Sem canal
+// (ou com o canal desconectado) NÃO grava nada: devolve o motivo, em vez de
+// registrar como "enviada" uma mensagem que ninguém recebeu.
+export async function mcpSendMessage(organizationId: string, contactId: string, text: string, connectionId?: string) {
+  const result = await sendContactMessage(organizationId, contactId, text, { connectionId });
+  if (!result.ok) return { ok: false as const, code: result.code, error: result.error };
+  return {
+    ok: result.status === "sent",
+    status: result.status,
+    messageId: result.messageId,
+    connectionId: result.connectionId,
+    ...(result.error ? { error: result.error } : {}),
+  };
 }

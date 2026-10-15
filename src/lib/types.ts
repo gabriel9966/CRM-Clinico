@@ -83,6 +83,19 @@ export type MessageDTO = {
   time: string;
   contactId: string;
   senderId: string | null;
+  /** "sent" ou "failed" (o provedor recusou o envio). */
+  status: string;
+};
+
+/** Canal pelo qual se pode falar com um contato (WhatsApp, Instagram ou e-mail). */
+export type SendOptionDTO = {
+  connectionId: string;
+  provider: "WHATSAPP_EVOLUTION" | "INSTAGRAM" | "EMAIL";
+  label: string;
+  /** Conexão ativa agora; desconectada não envia. */
+  connected: boolean;
+  /** O contato já tem conversa por este canal (senão será iniciada no primeiro envio). */
+  existing: boolean;
 };
 
 export type AppointmentDTO = {

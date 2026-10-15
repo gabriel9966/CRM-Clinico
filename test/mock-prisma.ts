@@ -9,6 +9,7 @@ function makeModel() {
     findMany: vi.fn(),
     findFirst: vi.fn(),
     findUnique: vi.fn(),
+    findUniqueOrThrow: vi.fn(),
     create: vi.fn(),
     createMany: vi.fn(),
     update: vi.fn(),

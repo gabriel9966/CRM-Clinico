@@ -11,9 +11,10 @@ import type {
   MessageDTO,
   MessageTemplateDTO,
   Page,
+  SendOptionDTO,
   TeamMemberDTO,
 } from "@/lib/types";
-import { sendMessage, simulateReply } from "@/app/conversations/actions";
+import { sendMessage, fetchSendOptions } from "@/app/conversations/actions";
 import { fetchConversations, fetchThread } from "@/app/listings/actions";
 import { reassignContactOwner } from "@/app/contacts/actions";
 import { createMessageTemplate, deleteMessageTemplate } from "@/app/templates/actions";
@@ -57,6 +58,7 @@ export function ConversationsView({
   initialPage,
   initialChannels,
   initialThread,
+  initialSendOptions,
   team,
   currentUserRole,
   templates,
@@ -65,6 +67,8 @@ export function ConversationsView({
   initialChannels: Record<string, ConversationChannelInfo>;
   /** Mensagens da primeira conversa, já carregadas pelo servidor. */
   initialThread: Page<MessageDTO> | null;
+  /** Canais de envio da primeira conversa. */
+  initialSendOptions: SendOptionDTO[];
   team: TeamMemberDTO[];
   currentUserRole: "ADMIN" | "MEMBER";
   templates: MessageTemplateDTO[];
@@ -87,6 +91,11 @@ export function ConversationsView({
   const [threadLoading, setThreadLoading] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
 
+  // Toda mensagem sai por um canal real. Aqui ficam os canais do contato aberto,
+  // o escolhido para enviar e o último erro de envio.
+  const [sendOptions, setSendOptions] = useState<SendOptionDTO[]>(initialSendOptions);
+  const [chosenConnection, setChosenConnection] = useState<string>("");
+  const [sendError, setSendError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [manageTemplatesOpen, setManageTemplatesOpen] = useState(false);
@@ -94,6 +103,7 @@ export function ConversationsView({
   const bodyRef = useRef<HTMLDivElement>(null);
   const listSeq = useRef(0);
   const threadSeq = useRef(0);
+  const selectedIdRef = useRef<string | null>(initialPage.items[0]?.contact.id ?? null);
   const pagesLoaded = useRef(1);
   const skipFirstListLoad = useRef(true);
 
@@ -170,11 +180,18 @@ export function ConversationsView({
   // clique, não num efeito: assim não há renderização com a conversa errada).
   function openConversation(c: ContactDTO) {
     if (c.id === selectedId) return;
+    selectedIdRef.current = c.id;
     setSelectedId(c.id);
     setSelectedContact(c);
     setMessages([]);
     setOlderCursor(null);
+    setSendOptions([]);
+    setChosenConnection("");
+    setSendError(null);
     loadThread(c.id);
+    fetchSendOptions(c.id).then((opts) => {
+      if (selectedIdRef.current === c.id) setSendOptions(opts); // ignora se já trocou de conversa
+    });
   }
 
   async function loadOlder() {
@@ -245,22 +262,40 @@ export function ConversationsView({
     if (!activeContact || !inputRef.current) return;
     const text = inputRef.current.value.trim();
     if (!text) return;
-    inputRef.current.value = "";
     setSending(true);
+    setSendError(null);
     try {
       const contactId = activeContact.id;
-      const result = await sendMessage(contactId, text);
+      const result = await sendMessage(contactId, text, chosenConnection || undefined);
+      if (!result.ok) {
+        // Nada foi enviado nem gravado: o texto continua no campo para tentar de novo.
+        setSendError(result.error);
+        return;
+      }
+      inputRef.current.value = "";
+      if (result.status === "failed") {
+        setSendError(`A mensagem foi registrada, mas o canal recusou o envio${result.error ? `: ${result.error}` : ""}.`);
+      }
       await refreshNow();
-      if (result?.usedRealChannel) return;
-      // Resposta simulada: só existe em modo demonstração (DEMO_MODE no servidor).
-      setTimeout(async () => {
-        await simulateReply(contactId);
-        await refreshNow();
-      }, 1400);
+      // O envio pode ter criado o vínculo com o canal (primeira conversa).
+      setSendOptions(await fetchSendOptions(contactId));
     } finally {
       setSending(false);
     }
   }
+
+  // Canais prontos para enviar agora (conectados). Se houver mais de um, o
+  // atendente escolhe; se não houver nenhum, o envio fica bloqueado.
+  const usableChannels = sendOptions.filter((o) => o.connected);
+  const PROVIDER_NAME: Record<SendOptionDTO["provider"], string> = {
+    WHATSAPP_EVOLUTION: "WhatsApp",
+    INSTAGRAM: "Instagram",
+    EMAIL: "E-mail",
+  };
+  const noChannelReason =
+    sendOptions.length === 0
+      ? "Este contato não tem um canal de conversa (WhatsApp, Instagram ou e-mail). Cadastre o telefone do contato e conecte um canal em Conexões, ou espere ele escrever primeiro."
+      : "O canal deste contato está desconectado. Reconecte-o em Conexões para enviar.";
 
   return (
     <>
@@ -387,11 +422,55 @@ export function ConversationsView({
                   ) : (
                     messages.map((m) => (
                       <div key={m.id} className={`bubble-row ${m.direction === "out" ? "me" : "them"}`}>
-                        <div className="bubble">{m.text}<span className="time">{fmtTime(m.time)}</span></div>
+                        <div className="bubble">
+                          {m.text}
+                          <span className="time">{fmtTime(m.time)}</span>
+                          {m.status === "failed" && (
+                            <span style={{ display: "block", fontSize: 11, fontWeight: 700, color: "#fecaca", marginTop: 2 }}>
+                              ⚠ Não foi entregue — o canal recusou o envio
+                            </span>
+                          )}
+                        </div>
                       </div>
                     ))
                   )}
                 </div>
+                {usableChannels.length === 0 ? (
+                  <div
+                    role="alert"
+                    style={{ padding: "10px 16px", fontSize: 12, fontWeight: 600, color: "var(--orange)", background: "var(--orange-soft, #fff7ed)", borderTop: "1px solid var(--border-soft)" }}
+                  >
+                    {noChannelReason}
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 16px 0", fontSize: 12 }}>
+                    <span className="muted">Enviar por:</span>
+                    {usableChannels.length > 1 ? (
+                      <select
+                        value={chosenConnection || usableChannels[0].connectionId}
+                        onChange={(e) => setChosenConnection(e.target.value)}
+                        style={{ fontSize: 12, padding: "2px 6px" }}
+                      >
+                        {usableChannels.map((o) => (
+                          <option key={o.connectionId} value={o.connectionId}>
+                            {PROVIDER_NAME[o.provider]} · {o.label}
+                            {o.existing ? "" : " (iniciar conversa)"}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className="pill" style={{ background: "var(--green-soft)", color: "var(--green)" }}>
+                        {PROVIDER_NAME[usableChannels[0].provider]} · {usableChannels[0].label}
+                        {usableChannels[0].existing ? "" : " (iniciar conversa)"}
+                      </span>
+                    )}
+                  </div>
+                )}
+                {sendError && (
+                  <div role="alert" style={{ padding: "6px 16px 0", fontSize: 12, fontWeight: 600, color: "var(--red)" }}>
+                    {sendError}
+                  </div>
+                )}
                 <form className="thread-input" onSubmit={handleSend} style={{ position: "relative" }}>
                   <button
                     type="button"
@@ -400,8 +479,13 @@ export function ConversationsView({
                   >
                     Modelos
                   </button>
-                  <input ref={inputRef} placeholder="Escreva uma mensagem..." autoComplete="off" />
-                  <button type="submit" className="btn primary icon-only" disabled={sending}><Icon.send /></button>
+                  <input
+                    ref={inputRef}
+                    placeholder={usableChannels.length === 0 ? "Sem canal para enviar" : "Escreva uma mensagem..."}
+                    autoComplete="off"
+                    disabled={usableChannels.length === 0}
+                  />
+                  <button type="submit" className="btn primary icon-only" disabled={sending || usableChannels.length === 0}><Icon.send /></button>
 
                   {templatesOpen && (
                     <div className="modal" style={{ position: "absolute", bottom: "100%", left: 0, width: 320, maxHeight: 260, overflowY: "auto", marginBottom: 8, zIndex: 10 }}>
