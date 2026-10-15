@@ -9,10 +9,11 @@ import { NextResponse, type NextRequest } from "next/server";
 export async function GET(req: NextRequest) {
   // Só repassa motivos conhecidos (nada de texto livre na URL do login).
   const error = req.nextUrl.searchParams.get("error");
-  const target = new URL("/login", req.url);
-  if (error === "org_suspended") target.searchParams.set("error", error);
+  const location = error === "org_suspended" ? "/login?error=org_suspended" : "/login";
 
-  const res = NextResponse.redirect(target, 303);
+  // Location RELATIVA de propósito: atrás do nginx, req.url traz o endereço
+  // interno do container (localhost:3000) e mandaria o navegador para lá.
+  const res = new NextResponse(null, { status: 303, headers: { location } });
   res.cookies.delete("crm_session");
   return res;
 }
