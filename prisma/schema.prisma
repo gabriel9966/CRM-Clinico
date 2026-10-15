@@ -1,0 +1,744 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum OrgStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+// Uma empresa cliente da plataforma (tenant). Todo dado "de negócio" abaixo
+// (pipelines, contatos, automações, etc.) pertence a UMA organização e nunca
+// é visível para outra — é a fronteira de isolamento do multi-tenant.
+model Organization {
+  id        String    @id @default(cuid())
+  name      String
+  slug      String    @unique
+  status    OrgStatus @default(ACTIVE)
+  createdAt DateTime  @default(now())
+
+  // Agenda clínica: fuso, expediente padrão (minutos desde 00:00) e passo da
+  // grade de horários oferecidos.
+  timezone        String @default("America/Sao_Paulo")
+  slotStepMin     Int    @default(30)
+  minLeadMinutes  Int    @default(10)
+
+  users         User[]
+  pipelines     Pipeline[]
+  contacts      Contact[]
+  opportunities Opportunity[]
+  messages      Message[]
+  activities    Activity[]
+  appointments  Appointment[]
+  professionals Professional[]
+  rooms         Room[]
+  procedures    Procedure[]
+  scheduleBlocks ScheduleBlock[]
+  auditLogs     AuditLog[]
+  tags          Tag[]
+  lossReasons   LossReason[]
+  opportunityItems OpportunityItem[]
+  connections   Connection[]
+  automations   Automation[]
+  mcpConfig     McpConfig?
+  customFieldDefinitions CustomFieldDefinition[]
+  opportunityStageHistory OpportunityStageHistory[]
+  segments     Segment[]
+  messageTemplates MessageTemplate[]
+
+  // Ponteiro do round-robin de atribuição automática de novos contatos (ver
+  // assignNextOwner em lib/assignment.ts) — aponta pro último membro que
+  // recebeu um contato, pra saber quem vem a seguir na fila.
+  lastAssignedUserId String?
+}
+
+enum Role {
+  ADMIN
+  MEMBER
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  color        String   @default("#4f46e5")
+  role         Role     @default(MEMBER)
+  isSuperAdmin Boolean  @default(false)
+  // Membros inativos (ex: de férias) ficam fora do rodízio de atribuição
+  // automática em lib/assignment.ts, mas continuam podendo logar normalmente.
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  // null apenas para o(s) super-admin(s) da plataforma, que não pertencem a
+  // nenhuma empresa cliente específica.
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  ownedContacts      Contact[]     @relation("ContactOwner")
+  ownedOpportunities Opportunity[] @relation("OpportunityOwner")
+  sentMessages       Message[]     @relation("MessageSender")
+  activities         Activity[]    @relation("ActivityAssignee")
+  appointments       Appointment[] @relation("AppointmentOwner")
+  googleAccount      GoogleAccount?
+
+  @@index([organizationId])
+}
+
+// Configuração da integração MCP de UMA organização (chave de API exibida/
+// gerenciada pela tela "Integração MCP").
+model McpConfig {
+  id        String   @id @default(cuid())
+  apiKey    String // criptografado
+  // SHA-256 da chave, para achar a organização sem decifrar a chave de todas as
+  // empresas a cada requisição. Preenchido na criação/rotação; chaves antigas
+  // ganham o hash na primeira vez que são usadas (ver resolveOrgByMcpApiKey).
+  apiKeyHash String? @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organizationId String       @unique
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+// Credenciais OAuth do Google Calendar de UM atendente (cada pessoa conecta
+// a própria conta — não é uma conta fixa da plataforma). Isolada por
+// pertencer a um User, que já pertence a uma Organization.
+model GoogleAccount {
+  id           String   @id @default(cuid())
+  accessToken  String // criptografado
+  refreshToken String // criptografado
+  expiresAt    DateTime
+  email        String?
+  calendarId   String   @default("primary")
+  connectedAt  DateTime @default(now())
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+}
+
+// ── Agenda clínica ─────────────────────────────────────────────────────────
+// Profissional que atende (esteticista, dentista, médico). `userId` é opcional:
+// nem todo profissional precisa de login no CRM. Horário de trabalho em
+// minutos desde 00:00 no fuso da organização; workDays usa 0=domingo..6=sábado.
+model Professional {
+  id            String  @id @default(cuid())
+  name          String
+  specialty     String?
+  color         String  @default("#4f46e5")
+  active        Boolean @default(true)
+  userId        String?
+  workDays      Int[]   @default([1, 2, 3, 4, 5])
+  workStartMin  Int     @default(540)
+  workEndMin    Int     @default(1080)
+  createdAt     DateTime @default(now())
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  appointments Appointment[]
+  blocks       ScheduleBlock[]
+
+  @@index([organizationId])
+}
+
+model Room {
+  id        String   @id @default(cuid())
+  name      String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  appointments Appointment[]
+
+  @@index([organizationId])
+}
+
+// Catálogo de procedimentos. `returnIntervalDays` alimenta o retorno automático
+// ("faz 5 meses do seu botox"); o preço fica em centavos para evitar float.
+model Procedure {
+  id                 String  @id @default(cuid())
+  name               String
+  durationMin        Int     @default(60)
+  priceCents         Int     @default(0)
+  returnIntervalDays Int?
+  // PROCEDURE (atendimento avulso), PRODUCT (item vendido) ou PACKAGE (pacote
+  // de `sessions` sessões).
+  kind               String  @default("PROCEDURE")
+  sessions           Int?
+  active             Boolean @default(true)
+  createdAt          DateTime @default(now())
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  appointments Appointment[]
+  opportunityItems OpportunityItem[]
+
+  @@index([organizationId])
+}
+
+// Bloqueio de agenda: folga, férias, almoço, manutenção. professionalId nulo =
+// bloqueio da clínica inteira. Pontual usa `date` (YYYY-MM-DD no fuso da org);
+// recorrente usa `weekday` (0..6) e vale toda semana, salvo exceções.
+model ScheduleBlock {
+  id          String  @id @default(cuid())
+  description String?
+  isRecurring Boolean @default(false)
+  date        String?
+  weekday     Int?
+  startMin    Int
+  endMin      Int
+  createdAt   DateTime @default(now())
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  professionalId String?
+  professional   Professional? @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+
+  exceptions ScheduleBlockException[]
+
+  @@index([organizationId])
+  @@index([professionalId])
+}
+
+// Libera uma janela de um bloqueio recorrente em uma data específica.
+model ScheduleBlockException {
+  id       String @id @default(cuid())
+  date     String
+  startMin Int
+  endMin   Int
+
+  blockId String
+  block   ScheduleBlock @relation(fields: [blockId], references: [id], onDelete: Cascade)
+
+  @@index([blockId])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  action     String
+  entity     String
+  entityId   String?
+  actorId    String?
+  actorName  String?
+  ip         String?
+  meta       Json     @default("{}")
+  createdAt  DateTime @default(now())
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@index([entity, entityId])
+}
+
+// Um agendamento/reunião com um lead, com sincronização opcional pro Google
+// Calendar do atendente responsável.
+model Appointment {
+  id            String            @id @default(cuid())
+  title         String
+  notes         String?
+  startAt       DateTime
+  endAt         DateTime
+  status        AppointmentStatus @default(SCHEDULED)
+  googleEventId String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Campos da agenda clínica (todos opcionais: agendamentos genéricos antigos
+  // continuam válidos). idempotencyKey evita duplicar quando a IA/integração
+  // repete a mesma chamada.
+  idempotencyKey     String?
+  bookingChannel     String?
+  cancellationReason String?
+  cancelledAt        DateTime?
+  noShowReason       String?
+  rescheduleCount    Int       @default(0)
+
+  // Lixeira (ver lib/prisma.ts).
+  deletedAt DateTime?
+
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  ownerId String?
+  owner   User?   @relation("AppointmentOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  professionalId String?
+  professional   Professional? @relation(fields: [professionalId], references: [id], onDelete: SetNull)
+
+  roomId String?
+  room   Room?   @relation(fields: [roomId], references: [id], onDelete: SetNull)
+
+  procedureId String?
+  procedure   Procedure? @relation(fields: [procedureId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId])
+  @@index([contactId])
+  @@index([startAt])
+  @@index([organizationId, deletedAt, startAt])
+  @@index([professionalId, startAt])
+}
+
+model Pipeline {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  stages        Stage[]
+  opportunities Opportunity[]
+
+  @@index([organizationId])
+}
+
+model Stage {
+  id         String   @id @default(cuid())
+  label      String
+  color      String
+  order      Int
+
+  pipelineId String
+  pipeline   Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+
+  opportunities Opportunity[]
+  stageHistory  OpportunityStageHistory[]
+
+  @@index([pipelineId])
+}
+
+model Contact {
+  id        String   @id @default(cuid())
+  name      String
+  company   String?
+  email     String?
+  phone     String?
+  tags      String   @default("[]")
+  notes     String?
+  createdAt DateTime @default(now())
+
+  // Valores dos campos personalizados definidos em CustomFieldDefinition,
+  // guardados como { [fieldKey]: valor }. A lista de campos disponíveis
+  // fica na definição, não aqui — isso só guarda os valores preenchidos.
+  customFields Json @default("{}")
+
+  // Lixeira: apagar só marca deletedAt (ver lib/prisma.ts); restaurável em /trash.
+  deletedAt DateTime?
+
+  // Resumo da última mensagem, mantido por lib/messages.ts a cada mensagem
+  // nova. Permite listar conversas ordenadas e paginadas sem varrer a tabela
+  // de mensagens.
+  lastMessageAt        DateTime?
+  lastMessageText      String?
+  lastMessageDirection String?
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  ownerId String?
+  owner   User?   @relation("ContactOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  opportunities Opportunity[]
+  messages      Message[]
+  activities    Activity[]
+  channels      ContactChannel[]
+  appointments  Appointment[]
+
+  @@index([organizationId])
+  @@index([organizationId, deletedAt, createdAt])
+  @@index([organizationId, lastMessageAt])
+  @@index([organizationId, ownerId])
+}
+
+model Opportunity {
+  id            String    @id @default(cuid())
+  title         String
+  value         Float     @default(0)
+  tags          String    @default("[]")
+  expectedClose DateTime?
+  // Texto livre legado. O motivo "de verdade" é lossReasonId (catálogo
+  // LossReason, usado nos relatórios); lossReason guarda o nome no momento da
+  // perda para não quebrar telas antigas.
+  lossReason    String?
+  createdAt     DateTime  @default(now())
+
+  customFields Json @default("{}")
+
+  // Lixeira (ver lib/prisma.ts).
+  deletedAt DateTime?
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  lossReasonId String?
+  lossReasonRef LossReason? @relation(fields: [lossReasonId], references: [id], onDelete: SetNull)
+
+  items OpportunityItem[]
+
+  pipelineId String
+  pipeline   Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+
+  stageId String
+  stage   Stage  @relation(fields: [stageId], references: [id], onDelete: Cascade)
+
+  ownerId String?
+  owner   User?   @relation("OpportunityOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  activities Activity[]
+  stageHistory OpportunityStageHistory[]
+
+  @@index([organizationId])
+  @@index([contactId])
+  @@index([pipelineId])
+  @@index([stageId])
+  @@index([organizationId, deletedAt, createdAt])
+  @@index([pipelineId, stageId, deletedAt])
+}
+
+// ── Catálogos (antes eram texto solto dentro de Contact/Opportunity) ────────
+
+// Etiqueta gerenciável: cor e nome únicos por organização. Contact.tags e
+// Opportunity.tags continuam guardando os NOMES (compatível com automações,
+// segmentos e CSV); renomear/excluir aqui propaga para eles.
+model Tag {
+  id        String   @id @default(cuid())
+  name      String
+  color     String   @default("#64748b")
+  createdAt DateTime @default(now())
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, name])
+}
+
+// Motivo de perda padronizado — permite relatório "perdas por motivo".
+model LossReason {
+  id        String   @id @default(cuid())
+  name      String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  opportunities Opportunity[]
+
+  @@unique([organizationId, name])
+}
+
+// Item (procedimento/produto/pacote) dentro de uma oportunidade. O valor da
+// oportunidade é a soma de quantidade × valor unitário − desconto dos itens.
+model OpportunityItem {
+  id            String @id @default(cuid())
+  name          String
+  quantity      Int    @default(1)
+  unitCents     Int    @default(0)
+  discountCents Int    @default(0)
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  opportunityId String
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  procedureId String?
+  procedure   Procedure? @relation(fields: [procedureId], references: [id], onDelete: SetNull)
+
+  @@index([opportunityId])
+  @@index([organizationId])
+}
+
+// Registro de quanto tempo uma oportunidade passou em cada etapa (histórico
+// append-only: ao mudar de etapa, fecha o registro aberto com exitedAt e abre
+// um novo). Alimenta métricas de velocity/conversão por etapa no dashboard.
+model OpportunityStageHistory {
+  id        String    @id @default(cuid())
+  enteredAt DateTime  @default(now())
+  exitedAt  DateTime?
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  opportunityId String
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  stageId String
+  stage   Stage @relation(fields: [stageId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([opportunityId])
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  text      String
+  direction String // "in" (contato->nós) | "out" (nós->contato)
+  time      DateTime @default(now())
+  status    String   @default("sent") // "sent" | "failed" | "pending" — para envios por canal externo
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  senderId String?
+  sender   User?   @relation("MessageSender", fields: [senderId], references: [id], onDelete: SetNull)
+
+  connectionId String?
+  connection   Connection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([contactId])
+  @@index([contactId, time])
+}
+
+enum ConnectionProvider {
+  WHATSAPP_EVOLUTION
+  INSTAGRAM
+  EMAIL
+}
+
+enum ConnectionStatus {
+  DISCONNECTED
+  CONNECTING
+  CONNECTED
+  ERROR
+}
+
+// Uma instância de canal conectada pelo próprio usuário (não fixa pela plataforma):
+// cada conexão guarda as credenciais da conta de WhatsApp/Instagram que a pessoa
+// mesma possui e configurou.
+model Connection {
+  id        String             @id @default(cuid())
+  provider  ConnectionProvider
+  label     String
+  status    ConnectionStatus   @default(DISCONNECTED)
+  config    String             @default("{}") // JSON criptografado com as credenciais do provedor
+  lastError String?
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  contactChannels ContactChannel[]
+  messages        Message[]
+
+  @@index([organizationId])
+}
+
+// Liga um Contact do CRM ao identificador dele num canal externo
+// (ex: número de WhatsApp / id de usuário do Instagram), para rotear
+// mensagens recebidas via webhook para o contato certo.
+model ContactChannel {
+  id           String   @id @default(cuid())
+  externalId   String // remoteJid no WhatsApp, IGSID no Instagram, etc.
+  externalName String?
+  createdAt    DateTime @default(now())
+
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  connectionId String
+  connection   Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([connectionId, externalId])
+  @@index([contactId])
+}
+
+enum ActivityType {
+  TASK
+  CALL
+  MEETING
+}
+
+model Activity {
+  id        String       @id @default(cuid())
+  type      ActivityType @default(TASK)
+  title     String
+  notes     String?
+  dueAt     DateTime
+  done      Boolean      @default(false)
+  createdAt DateTime     @default(now())
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  opportunityId String?
+  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  assigneeId String?
+  assignee   User?   @relation("ActivityAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([contactId])
+  @@index([opportunityId])
+  @@index([dueAt])
+}
+
+enum AutomationTrigger {
+  STAGE_CHANGED
+  CONTACT_CREATED
+  OPPORTUNITY_CREATED
+  TAG_ADDED
+  MESSAGE_RECEIVED
+  WEBHOOK_RECEIVED
+}
+
+// Uma automação: um fluxo visual (nós + arestas, no formato do React Flow)
+// que roda quando o gatilho configurado acontece.
+model Automation {
+  id            String            @id @default(cuid())
+  name          String
+  enabled       Boolean           @default(true)
+  trigger       AutomationTrigger
+  triggerConfig String            @default("{}") // ex: {"pipelineId":"...","stageId":"..."} para STAGE_CHANGED
+  flow          String            @default("{\"nodes\":[],\"edges\":[]}") // { nodes, edges } do React Flow
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  runs AutomationRun[]
+
+  @@index([organizationId])
+}
+
+enum AutomationRunStatus {
+  RUNNING
+  WAITING
+  COMPLETED
+  FAILED
+}
+
+// Uma execução de uma automação para um contato/oportunidade específico.
+model AutomationRun {
+  id            String              @id @default(cuid())
+  status        AutomationRunStatus @default(RUNNING)
+  currentNodeId String?
+  log           String              @default("[]") // array JSON de {nodeId, label, result, at}
+  startedAt     DateTime            @default(now())
+  finishedAt    DateTime?
+
+  automationId String
+  automation   Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  contactId     String?
+  opportunityId String?
+  payload       String? // JSON bruto recebido (gatilho de webhook), guardado pra o nó de código acessar
+
+  schedule AutomationSchedule?
+
+  @@index([automationId])
+}
+
+// Um passo de "espera" agendado: quando o motor chega num nó de delay, grava
+// aqui e para; um worker de fila (BullMQ) retoma a execução quando chegar a hora.
+model AutomationSchedule {
+  id      String   @id @default(cuid())
+  nodeId  String
+  runAt   DateTime
+  jobId   String? // id do job no BullMQ, pra poder cancelar/reagendar
+
+  automationRunId String        @unique
+  automationRun   AutomationRun @relation(fields: [automationRunId], references: [id], onDelete: Cascade)
+
+  @@index([runAt])
+}
+
+enum CustomFieldEntity {
+  CONTACT
+  OPPORTUNITY
+}
+
+enum CustomFieldType {
+  TEXT
+  NUMBER
+  DATE
+  BOOLEAN
+  SELECT
+}
+
+// Definição de um campo extra que a empresa configurou para Contatos ou
+// Oportunidades. Os VALORES preenchidos ficam em Contact.customFields /
+// Opportunity.customFields (JSON { [key]: valor }); isto aqui só descreve
+// quais campos existem, o tipo de cada um e a ordem de exibição.
+model CustomFieldDefinition {
+  id        String            @id @default(cuid())
+  entity    CustomFieldEntity
+  key       String // identificador estável, usado como chave no JSON de valores
+  label     String
+  type      CustomFieldType   @default(TEXT)
+  options   String            @default("[]") // opções (JSON string[]) quando type = SELECT
+  order     Int               @default(0)
+  createdAt DateTime          @default(now())
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, entity, key])
+  @@index([organizationId])
+}
+
+// Modelo reutilizável de mensagem (WhatsApp/Instagram/E-mail), com placeholders
+// simples ({{nome}}, {{empresa}}) substituídos na hora do envio a partir dos
+// dados do contato — ver resolveTemplate em components/conversations/ConversationsView.tsx.
+model MessageTemplate {
+  id        String   @id @default(cuid())
+  name      String
+  subject   String? // usado só quando o canal de destino é e-mail
+  body      String
+  createdAt DateTime @default(now())
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+// Lista salva (smart list): um conjunto de critérios reaplicável sobre
+// Contatos ou Oportunidades, reavaliado a cada visualização (não guarda os
+// ids, só os filtros — ver evaluateSegment em lib/segments.ts).
+model Segment {
+  id        String            @id @default(cuid())
+  name      String
+  entity    CustomFieldEntity
+  filters   String            @default("{}") // JSON: ver SegmentFilters em lib/segments.ts
+  createdAt DateTime          @default(now())
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}

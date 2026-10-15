@@ -1,0 +1,29 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - novacrm_redis:/data
+
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=${DATABASE_URL}
+    depends_on:
+      - redis
+    networks:
+      - default
+      - supabase_default
+    ports:
+      - "127.0.0.1:3001:3000"
+
+networks:
+  default: {}
+  supabase_default:
+    external: true
+
+volumes:
+  novacrm_redis:

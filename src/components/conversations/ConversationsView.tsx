@@ -1,0 +1,535 @@
+"use client";
+
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { Icon } from "@/components/icons";
+import { colorFor, initials, timeAgo, fmtTime } from "@/lib/format";
+import type {
+  ContactDTO,
+  ConversationChannelInfo,
+  ConversationRowDTO,
+  MessageDTO,
+  MessageTemplateDTO,
+  Page,
+  TeamMemberDTO,
+} from "@/lib/types";
+import { sendMessage, simulateReply } from "@/app/conversations/actions";
+import { fetchConversations, fetchThread } from "@/app/listings/actions";
+import { reassignContactOwner } from "@/app/contacts/actions";
+import { createMessageTemplate, deleteMessageTemplate } from "@/app/templates/actions";
+
+const PROVIDER_LABEL: Record<NonNullable<ConversationChannelInfo>["provider"], string> = {
+  WHATSAPP_EVOLUTION: "WhatsApp",
+  INSTAGRAM: "Instagram",
+  EMAIL: "E-mail",
+};
+
+// Substitui placeholders simples pelos dados do contato ({{nome}}, {{empresa}}).
+function resolveTemplate(body: string, contact: ContactDTO): string {
+  return body
+    .replaceAll("{{nome}}", contact.name)
+    .replaceAll("{{empresa}}", contact.company || "")
+    .replaceAll("{{email}}", contact.email || "");
+}
+
+function ChannelBadge({ channel }: { channel: ConversationChannelInfo }) {
+  if (!channel) {
+    return <span className="pill" style={{ background: "var(--border-soft)", color: "var(--text-faint)" }}>Sem canal</span>;
+  }
+  return (
+    <span className="pill" style={{ background: "var(--green-soft)", color: "var(--green)" }}>
+      {PROVIDER_LABEL[channel.provider]} · {channel.label}
+    </span>
+  );
+}
+
+const POLL_MS = 8000;
+const SEARCH_DEBOUNCE_MS = 300;
+
+// Junta mensagens novas às já carregadas, sem duplicar e em ordem cronológica.
+function mergeMessages(current: MessageDTO[], incoming: MessageDTO[]): MessageDTO[] {
+  const byId = new Map(current.map((m) => [m.id, m]));
+  for (const m of incoming) byId.set(m.id, m);
+  return [...byId.values()].sort((a, b) => (a.time === b.time ? (a.id < b.id ? -1 : 1) : a.time < b.time ? -1 : 1));
+}
+
+export function ConversationsView({
+  initialPage,
+  initialChannels,
+  initialThread,
+  team,
+  currentUserRole,
+  templates,
+}: {
+  initialPage: Page<ConversationRowDTO>;
+  initialChannels: Record<string, ConversationChannelInfo>;
+  /** Mensagens da primeira conversa, já carregadas pelo servidor. */
+  initialThread: Page<MessageDTO> | null;
+  team: TeamMemberDTO[];
+  currentUserRole: "ADMIN" | "MEMBER";
+  templates: MessageTemplateDTO[];
+}) {
+  const router = useRouter();
+
+  // Lista de conversas (paginada) e canais só dos contatos carregados.
+  const [rows, setRows] = useState<ConversationRowDTO[]>(initialPage.items);
+  const [nextCursor, setNextCursor] = useState<string | null>(initialPage.nextCursor);
+  const [channels, setChannels] = useState(initialChannels);
+  const [search, setSearch] = useState("");
+  const [listLoading, setListLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  // Conversa aberta: mensagens da mais recente para trás, sob demanda.
+  const [selectedId, setSelectedId] = useState<string | null>(initialPage.items[0]?.contact.id ?? null);
+  const [selectedContact, setSelectedContact] = useState<ContactDTO | null>(initialPage.items[0]?.contact ?? null);
+  const [messages, setMessages] = useState<MessageDTO[]>(initialThread?.items ?? []);
+  const [olderCursor, setOlderCursor] = useState<string | null>(initialThread?.nextCursor ?? null);
+  const [threadLoading, setThreadLoading] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+
+  const [sending, setSending] = useState(false);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [manageTemplatesOpen, setManageTemplatesOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const listSeq = useRef(0);
+  const threadSeq = useRef(0);
+  const pagesLoaded = useRef(1);
+  const skipFirstListLoad = useRef(true);
+
+  function ownerOf(contact: ContactDTO) {
+    return contact.ownerId ? team.find((m) => m.id === contact.ownerId) : undefined;
+  }
+
+  // A conversa aberta continua na tela mesmo que a busca da lista deixe de
+  // listá-la: guardamos o contato escolhido além das linhas carregadas.
+  const activeRow = rows.find((r) => r.contact.id === selectedId) ?? null;
+  const activeContact = activeRow?.contact ?? (selectedContact?.id === selectedId ? selectedContact : null);
+  const activeChannel = activeContact ? channels[activeContact.id] ?? null : null;
+  const activeOwner = activeContact ? ownerOf(activeContact) : undefined;
+
+  // ── Lista: busca (no servidor) e "carregar mais" ──────────────────────────
+  const reloadList = useCallback(
+    async (q: string) => {
+      const mine = ++listSeq.current;
+      setListLoading(true);
+      try {
+        const { page, channels: ch } = await fetchConversations({ q: q.trim() || undefined });
+        if (mine !== listSeq.current) return;
+        setRows(page.items);
+        setNextCursor(page.nextCursor);
+        setChannels(ch);
+        pagesLoaded.current = 1;
+      } finally {
+        if (mine === listSeq.current) setListLoading(false);
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (skipFirstListLoad.current) {
+      skipFirstListLoad.current = false;
+      return;
+    }
+    const timer = setTimeout(() => reloadList(search), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [search, reloadList]);
+
+  async function loadMoreConversations() {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    const mine = listSeq.current;
+    try {
+      const { page, channels: ch } = await fetchConversations({ q: search.trim() || undefined, cursor: nextCursor });
+      if (mine !== listSeq.current) return;
+      setRows((prev) => [...prev, ...page.items.filter((r) => !prev.some((p) => p.contact.id === r.contact.id))]);
+      setNextCursor(page.nextCursor);
+      setChannels((prev) => ({ ...prev, ...ch }));
+      pagesLoaded.current += 1;
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
+  // ── Conversa aberta: carrega as mensagens mais recentes ao trocar de contato ─
+  const loadThread = useCallback(async (contactId: string) => {
+    const mine = ++threadSeq.current;
+    setThreadLoading(true);
+    try {
+      const page = await fetchThread(contactId);
+      if (mine !== threadSeq.current) return;
+      setMessages(page?.items ?? []);
+      setOlderCursor(page?.nextCursor ?? null);
+    } finally {
+      if (mine === threadSeq.current) setThreadLoading(false);
+    }
+  }, []);
+
+  // Trocar de conversa limpa a tela e busca as mensagens da nova (feito no
+  // clique, não num efeito: assim não há renderização com a conversa errada).
+  function openConversation(c: ContactDTO) {
+    if (c.id === selectedId) return;
+    setSelectedId(c.id);
+    setSelectedContact(c);
+    setMessages([]);
+    setOlderCursor(null);
+    loadThread(c.id);
+  }
+
+  async function loadOlder() {
+    if (!selectedId || !olderCursor || loadingOlder) return;
+    setLoadingOlder(true);
+    const el = bodyRef.current;
+    const prevHeight = el?.scrollHeight ?? 0;
+    try {
+      const page = await fetchThread(selectedId, olderCursor);
+      if (!page) return;
+      setMessages((prev) => mergeMessages(prev, page.items));
+      setOlderCursor(page.nextCursor);
+      // mantém a leitura no mesmo ponto depois de inserir mensagens acima
+      requestAnimationFrame(() => {
+        if (el) el.scrollTop = el.scrollHeight - prevHeight;
+      });
+    } finally {
+      setLoadingOlder(false);
+    }
+  }
+
+  // Rola para a última mensagem ao abrir a conversa e quando chega mensagem nova.
+  const lastMessageId = messages[messages.length - 1]?.id;
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [selectedId, lastMessageId]);
+
+  // ── Atualização periódica (no lugar de tempo real) ────────────────────────
+  useEffect(() => {
+    const tick = async () => {
+      if (document.visibilityState !== "visible") return;
+      try {
+        // Lista: só se o usuário não está buscando nem paginou (senão apagaria o que ele carregou).
+        if (!search.trim() && pagesLoaded.current === 1) {
+          const { page, channels: ch } = await fetchConversations();
+          setRows(page.items);
+          setNextCursor(page.nextCursor);
+          setChannels((prev) => ({ ...prev, ...ch }));
+        }
+        if (selectedId) {
+          const page = await fetchThread(selectedId);
+          if (page) setMessages((prev) => mergeMessages(prev, page.items));
+        }
+      } catch {
+        // falha de rede momentânea: tenta de novo no próximo ciclo
+      }
+    };
+    const id = setInterval(tick, POLL_MS);
+    return () => clearInterval(id);
+  }, [search, selectedId]);
+
+  async function refreshNow() {
+    if (!search.trim() && pagesLoaded.current === 1) {
+      const { page, channels: ch } = await fetchConversations();
+      setRows(page.items);
+      setNextCursor(page.nextCursor);
+      setChannels((prev) => ({ ...prev, ...ch }));
+    }
+    if (selectedId) {
+      const page = await fetchThread(selectedId);
+      if (page) setMessages((prev) => mergeMessages(prev, page.items));
+    }
+  }
+
+  async function handleSend(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!activeContact || !inputRef.current) return;
+    const text = inputRef.current.value.trim();
+    if (!text) return;
+    inputRef.current.value = "";
+    setSending(true);
+    try {
+      const contactId = activeContact.id;
+      const result = await sendMessage(contactId, text);
+      await refreshNow();
+      if (result?.usedRealChannel) return;
+      // Resposta simulada: só existe em modo demonstração (DEMO_MODE no servidor).
+      setTimeout(async () => {
+        await simulateReply(contactId);
+        await refreshNow();
+      }, 1400);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="topbar">
+        <div>
+          <h1>Conversas</h1>
+          <div className="sub">
+            {currentUserRole === "ADMIN"
+              ? "Converse com seus contatos em um só lugar"
+              : "Suas conversas atribuídas — colegas não aparecem aqui"}
+          </div>
+        </div>
+      </div>
+      <div className="content">
+        <div className="convo-layout">
+          <div className="convo-list">
+            <div className="search-bar" style={{ margin: 8 }}>
+              <Icon.search />
+              <input
+                placeholder="Buscar contato para conversar..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+            {rows.length === 0 ? (
+              <div className="thread-empty" style={{ padding: 24 }}>
+                <Icon.chat />
+                <div>
+                  {listLoading
+                    ? "Buscando…"
+                    : search.trim()
+                      ? "Nenhum contato encontrado"
+                      : "Nenhuma conversa atribuída a você ainda"}
+                </div>
+              </div>
+            ) : (
+              <>
+                {rows.map(({ contact: c, lastText, lastTime }) => {
+                  const owner = ownerOf(c);
+                  const channel = channels[c.id] ?? null;
+                  return (
+                    <div
+                      key={c.id}
+                      className={`convo-item ${selectedId === c.id ? "active" : ""}`}
+                      onClick={() => openConversation(c)}
+                    >
+                      <span className="avatar md" style={{ background: colorFor(c.name) }}>{initials(c.name)}</span>
+                      <div className="meta">
+                        <div className="top-row">
+                          <span className="cname">{c.name}</span>
+                          {lastTime && <span className="ctime">{timeAgo(lastTime)}</span>}
+                        </div>
+                        <div className="preview">{lastText ?? "Sem mensagens ainda"}</div>
+                        <div style={{ display: "flex", gap: 6, marginTop: 4, alignItems: "center" }}>
+                          <ChannelBadge channel={channel} />
+                          {currentUserRole === "ADMIN" && owner && (
+                            <span className="muted" style={{ fontSize: 11 }}>· {owner.name}</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                {nextCursor && (
+                  <div style={{ textAlign: "center", padding: 10 }}>
+                    <button className="btn small" onClick={loadMoreConversations} disabled={loadingMore}>
+                      {loadingMore ? "Carregando…" : "Carregar mais conversas"}
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+          <div className="convo-thread">
+            {!activeContact ? (
+              <div className="thread-empty"><Icon.chat /><div>Selecione uma conversa</div></div>
+            ) : (
+              <>
+                <div className="thread-head">
+                  <span className="avatar md" style={{ background: colorFor(activeContact.name) }}>
+                    {initials(activeContact.name)}
+                  </span>
+                  <div style={{ flex: 1 }}>
+                    <div className="hname">{activeContact.name}</div>
+                    <div className="hsub">{activeContact.company || activeContact.email}</div>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+                    <ChannelBadge channel={activeChannel} />
+                    {currentUserRole === "ADMIN" ? (
+                      <select
+                        value={activeContact.ownerId ?? ""}
+                        onChange={async (e) => {
+                          const ownerId = e.target.value || null;
+                          await reassignContactOwner(activeContact.id, ownerId);
+                          setRows((prev) =>
+                            prev.map((r) => (r.contact.id === activeContact.id ? { ...r, contact: { ...r.contact, ownerId } } : r))
+                          );
+                          setSelectedContact((prev) => (prev ? { ...prev, ownerId } : prev));
+                          router.refresh();
+                        }}
+                        style={{ fontSize: 11, padding: "2px 4px" }}
+                      >
+                        <option value="">Sem responsável</option>
+                        {team.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                      </select>
+                    ) : (
+                      activeOwner && <span className="muted" style={{ fontSize: 11 }}>Atende: {activeOwner.name}</span>
+                    )}
+                  </div>
+                </div>
+                <div className="thread-body" ref={bodyRef}>
+                  {olderCursor && (
+                    <div style={{ textAlign: "center", marginBottom: 8 }}>
+                      <button className="btn small ghost" onClick={loadOlder} disabled={loadingOlder}>
+                        {loadingOlder ? "Carregando…" : "Carregar mensagens anteriores"}
+                      </button>
+                    </div>
+                  )}
+                  {messages.length === 0 ? (
+                    <div className="thread-empty">
+                      <Icon.empty />
+                      <div>{threadLoading ? "Carregando…" : "Nenhuma mensagem ainda. Diga olá!"}</div>
+                    </div>
+                  ) : (
+                    messages.map((m) => (
+                      <div key={m.id} className={`bubble-row ${m.direction === "out" ? "me" : "them"}`}>
+                        <div className="bubble">{m.text}<span className="time">{fmtTime(m.time)}</span></div>
+                      </div>
+                    ))
+                  )}
+                </div>
+                <form className="thread-input" onSubmit={handleSend} style={{ position: "relative" }}>
+                  <button
+                    type="button"
+                    className="btn small"
+                    onClick={() => setTemplatesOpen((v) => !v)}
+                  >
+                    Modelos
+                  </button>
+                  <input ref={inputRef} placeholder="Escreva uma mensagem..." autoComplete="off" />
+                  <button type="submit" className="btn primary icon-only" disabled={sending}><Icon.send /></button>
+
+                  {templatesOpen && (
+                    <div className="modal" style={{ position: "absolute", bottom: "100%", left: 0, width: 320, maxHeight: 260, overflowY: "auto", marginBottom: 8, zIndex: 10 }}>
+                      <div className="modal-body" style={{ padding: 8 }}>
+                        {templates.length === 0 ? (
+                          <div className="muted" style={{ fontSize: 12, padding: 8 }}>Nenhum modelo salvo ainda.</div>
+                        ) : (
+                          templates.map((t) => (
+                            <div
+                              key={t.id}
+                              className="row"
+                              style={{ padding: "6px 8px", cursor: "pointer", borderRadius: 6 }}
+                              onClick={() => {
+                                if (inputRef.current && activeContact) {
+                                  inputRef.current.value = resolveTemplate(t.body, activeContact);
+                                  inputRef.current.focus();
+                                }
+                                setTemplatesOpen(false);
+                              }}
+                            >
+                              <div style={{ fontWeight: 600, fontSize: 13 }}>{t.name}</div>
+                              <div className="muted" style={{ fontSize: 11, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.body}</div>
+                            </div>
+                          ))
+                        )}
+                        <button
+                          type="button"
+                          className="btn small ghost"
+                          style={{ width: "100%", marginTop: 6 }}
+                          onClick={() => {
+                            setTemplatesOpen(false);
+                            setManageTemplatesOpen(true);
+                          }}
+                        >
+                          Gerenciar modelos
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </form>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {manageTemplatesOpen && (
+        <ManageTemplatesModal
+          templates={templates}
+          onClose={() => setManageTemplatesOpen(false)}
+          onRefresh={() => router.refresh()}
+        />
+      )}
+    </>
+  );
+}
+
+function ManageTemplatesModal({
+  templates,
+  onClose,
+  onRefresh,
+}: {
+  templates: MessageTemplateDTO[];
+  onClose: () => void;
+  onRefresh: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [body, setBody] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function handleCreate(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!name.trim() || !body.trim()) return;
+    setBusy(true);
+    try {
+      await createMessageTemplate(name, body);
+      setName("");
+      setBody("");
+      onRefresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDelete(id: string) {
+    setBusy(true);
+    try {
+      await deleteMessageTemplate(id);
+      onRefresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h2>Modelos de mensagem</h2>
+          <button className="close-x" onClick={onClose}><Icon.close /></button>
+        </div>
+        <div className="modal-body">
+          {templates.length === 0 ? (
+            <div className="empty-state"><Icon.empty /><div>Nenhum modelo salvo</div></div>
+          ) : (
+            templates.map((t) => (
+              <div key={t.id} className="row" style={{ display: "flex", gap: 8, alignItems: "center", padding: "8px 0" }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>{t.name}</div>
+                  <div className="muted" style={{ fontSize: 12 }}>{t.body}</div>
+                </div>
+                <button className="btn small danger" disabled={busy} onClick={() => handleDelete(t.id)}><Icon.trash /></button>
+              </div>
+            ))
+          )}
+          <form onSubmit={handleCreate} style={{ marginTop: 14, borderTop: "1px solid var(--border-soft)", paddingTop: 14 }}>
+            <div className="field">
+              <label>Nome do modelo</label>
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ex: Boas-vindas" />
+            </div>
+            <div className="field">
+              <label>Texto (use {"{{nome}}"}, {"{{empresa}}"}, {"{{email}}"})</label>
+              <textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder="Olá {{nome}}, tudo bem?" />
+            </div>
+            <button type="submit" className="btn primary small" disabled={busy}>Salvar modelo</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
