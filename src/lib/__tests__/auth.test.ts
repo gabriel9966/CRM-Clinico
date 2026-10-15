@@ -8,7 +8,7 @@ vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
 
 const { readSession } = await import("../session");
 const { redirect } = await import("next/navigation");
-const { requireAdminUser, requireAdminPage, requireOrgUser } = await import("../auth");
+const { requireAdminUser, requireAdminPage, requireOrgUser, requireUser } = await import("../auth");
 
 function loggedAs(role: "ADMIN" | "MEMBER", over: Record<string, unknown> = {}) {
   vi.mocked(readSession).mockResolvedValue({ userId: "u1" } as never);
@@ -45,9 +45,24 @@ describe("requireAdminUser (server actions)", () => {
     await expect(requireAdminUser()).rejects.toThrow("REDIRECT:/login");
   });
 
-  it("organização suspensa não passa nem sendo administrador", async () => {
+  it("organização suspensa não passa nem sendo administrador (limpa a sessão, sem loop)", async () => {
     loggedAs("ADMIN", { organization: { id: "org-1", status: "SUSPENDED" } });
-    await expect(requireAdminUser()).rejects.toThrow("REDIRECT:/login?error=org_suspended");
+    await expect(requireAdminUser()).rejects.toThrow("REDIRECT:/api/session/clear?error=org_suspended");
+  });
+
+  // Regressão do ERR_TOO_MANY_REDIRECTS: sessão assinada válida cujo usuário
+  // não existe mais. Ir só para /login faz o proxy devolver para "/" (loop).
+  it("sessão órfã (usuário não existe mais) limpa o cookie em vez de ir direto ao /login", async () => {
+    vi.mocked(readSession).mockResolvedValue({ userId: "apagado" } as never);
+    mockPrisma.user.findUnique.mockResolvedValue(null);
+    await expect(requireUser()).rejects.toThrow("REDIRECT:/api/session/clear");
+  });
+
+  it("usuário comum sem empresa também limpa a sessão; super-admin sem empresa vai ao painel", async () => {
+    loggedAs("MEMBER", { organizationId: null, organization: null, isSuperAdmin: false });
+    await expect(requireOrgUser()).rejects.toThrow("REDIRECT:/api/session/clear");
+    loggedAs("ADMIN", { organizationId: null, organization: null, isSuperAdmin: true });
+    await expect(requireOrgUser()).rejects.toThrow("REDIRECT:/admin");
   });
 });
 

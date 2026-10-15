@@ -17,7 +17,11 @@ export async function getCurrentUser() {
 // Qualquer usuário autenticado (super-admin incluído, mesmo sem organização).
 export async function requireUser() {
   const user = await getCurrentUser();
-  if (!user) redirect("/login");
+  if (!user) {
+    // Se há sessão mas o usuário sumiu, só ir para /login não basta: o proxy
+    // acha a sessão válida e devolve para "/" (loop). Limpa o cookie antes.
+    redirect((await readSession()) ? "/api/session/clear" : "/login");
+  }
   return user;
 }
 
@@ -28,10 +32,13 @@ export async function requireUser() {
 export async function requireOrgUser() {
   const user = await requireUser();
   if (!user.organizationId || !user.organization) {
-    redirect("/admin");
+    // Super-admin sem empresa usa o painel /admin; qualquer outro usuário sem
+    // empresa não tem onde ficar — limpa a sessão em vez de entrar em loop
+    // (/admin devolve para /dashboard, que devolve para /admin…).
+    redirect(user.isSuperAdmin ? "/admin" : "/api/session/clear");
   }
   if (user.organization.status === "SUSPENDED") {
-    redirect("/login?error=org_suspended");
+    redirect("/api/session/clear?error=org_suspended");
   }
   return { ...user, organizationId: user.organizationId, organization: user.organization };
 }
