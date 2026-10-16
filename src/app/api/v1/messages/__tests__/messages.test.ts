@@ -32,6 +32,8 @@ beforeEach(() => {
   vi.mocked(resolveOrgByMcpApiKey).mockResolvedValue("org-1");
   mockPrisma.contactChannel.findMany.mockResolvedValue([]);
   mockPrisma.connection.findMany.mockResolvedValue([]);
+  mockPrisma.conversation.findFirst.mockResolvedValue({ id: "cv-1" });
+  mockPrisma.conversation.updateMany.mockResolvedValue({ count: 1 });
 });
 
 describe("POST /api/v1/messages", () => {

@@ -21,6 +21,7 @@ import {
   deleteOpportunity,
   moveOpportunityStage,
   importOpportunitiesCsv,
+  configureStage,
 } from "@/app/pipeline/actions";
 import { fetchPipelineBoard, fetchStageCards } from "@/app/listings/actions";
 import { ImportCsvModal } from "@/components/shared/ImportCsvModal";
@@ -45,6 +46,7 @@ export function PipelineBoard({
   team,
   customFieldDefs,
   lossReasons,
+  tags,
 }: {
   pipelines: PipelineDTO[];
   initialPipelineId: string;
@@ -52,6 +54,7 @@ export function PipelineBoard({
   team: TeamMemberDTO[];
   customFieldDefs: CustomFieldDefinitionDTO[];
   lossReasons: { id: string; name: string }[];
+  tags: string[];
 }) {
   const router = useRouter();
   const [currentPipelineId, setCurrentPipelineId] = useState(initialPipelineId || pipelines[0]?.id || "");
@@ -60,6 +63,10 @@ export function PipelineBoard({
   const [boardError, setBoardError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("");
+  const [tagFilter, setTagFilter] = useState("");
+  const [overdueOnly, setOverdueOnly] = useState(false);
+  const [sort, setSort] = useState<"newest" | "value" | "close">("newest");
+  const [savedViews, setSavedViews] = useState<Array<{ name: string; pipelineId: string; owner: string; tag: string; overdue: boolean; sort: "newest" | "value" | "close"; search: string }>>([]);
   const [reloadKey, setReloadKey] = useState(0);
   const [modal, setModal] = useState<Modal | null>(null);
   const [pendingPipelineId, setPendingPipelineId] = useState<string | null>(null);
@@ -72,6 +79,17 @@ export function PipelineBoard({
 
   const requestId = useRef(0);
   const firstRun = useRef(true);
+
+  useEffect(() => {
+    try { setSavedViews(JSON.parse(localStorage.getItem("novacrm-pipeline-views") || "[]")); } catch { setSavedViews([]); }
+  }, []);
+  function saveView() {
+    const name = prompt("Nome da visão:");
+    if (!name?.trim()) return;
+    const next = [...savedViews.filter((view) => view.name !== name.trim()), { name: name.trim(), pipelineId: currentPipelineId, owner: ownerFilter, tag: tagFilter, overdue: overdueOnly, sort, search }];
+    setSavedViews(next); localStorage.setItem("novacrm-pipeline-views", JSON.stringify(next));
+  }
+  function applyView(name: string) { const view = savedViews.find((item) => item.name === name); if (!view) return; setCurrentPipelineId(view.pipelineId); setOwnerFilter(view.owner); setTagFilter(view.tag); setOverdueOnly(view.overdue); setSort(view.sort); setSearch(view.search); }
 
   function ownerOf(id: string | null) {
     return id ? team.find((m) => m.id === id) : undefined;
@@ -92,6 +110,7 @@ export function PipelineBoard({
         const next = await fetchPipelineBoard(currentPipelineId, {
           ownerId: ownerFilter || undefined,
           q: search.trim() || undefined,
+          tag: tagFilter || undefined, overdue: overdueOnly || undefined, sort,
         });
         if (mine === requestId.current) setBoard(next);
       } catch {
@@ -101,7 +120,7 @@ export function PipelineBoard({
       }
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [currentPipelineId, stageKey, ownerFilter, search, reloadKey]);
+  }, [currentPipelineId, stageKey, ownerFilter, search, tagFilter, overdueOnly, sort, reloadKey]);
 
   const loadMore = useCallback(
     async (stageId: string) => {
@@ -113,6 +132,7 @@ export function PipelineBoard({
           cursor: col.nextCursor,
           ownerId: ownerFilter || undefined,
           q: search.trim() || undefined,
+          tag: tagFilter || undefined, overdue: overdueOnly || undefined, sort,
         });
         setBoard((b) => {
           const cur = b[stageId];
@@ -132,7 +152,7 @@ export function PipelineBoard({
         setBoard((b) => (b[stageId] ? { ...b, [stageId]: { ...b[stageId], loadingMore: false } } : b));
       }
     },
-    [board, ownerFilter, search]
+    [board, ownerFilter, search, tagFilter, overdueOnly, sort]
   );
 
   async function run(fn: () => Promise<void>) {
@@ -258,6 +278,11 @@ export function PipelineBoard({
             <option value="">Todos os responsáveis</option>
             {team.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
           </select>
+          <select value={tagFilter} onChange={(e) => setTagFilter(e.target.value)} style={{ maxWidth: 150 }}><option value="">Todas as tags</option>{tags.map((tag) => <option key={tag}>{tag}</option>)}</select>
+          <select value={sort} onChange={(e) => setSort(e.target.value as typeof sort)} style={{ maxWidth: 150 }}><option value="newest">Mais recentes</option><option value="value">Maior valor</option><option value="close">Fechamento</option></select>
+          <label className="pipeline-overdue"><input type="checkbox" checked={overdueOnly} onChange={(e) => setOverdueOnly(e.target.checked)} /> Em atraso</label>
+          <select defaultValue="" onChange={(e) => { if (e.target.value) applyView(e.target.value); e.currentTarget.value = ""; }} style={{ maxWidth: 180 }}><option value="">Visões salvas</option>{savedViews.map((view) => <option key={view.name} value={view.name}>{view.name}</option>)}</select>
+          <button className="btn small" onClick={saveView}>Salvar visão</button>
           {boardLoading && <span className="muted" style={{ fontSize: 12 }}>Atualizando…</span>}
         </div>
         {boardError && <p style={{ color: "var(--red)", fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{boardError}</p>}
@@ -312,6 +337,7 @@ export function PipelineBoard({
                     <div className="count">{(col?.count ?? 0).toLocaleString("pt-BR")}</div>
                   </div>
                   <div className="kanban-col-sum">{fmtMoney(col?.sum ?? 0)}</div>
+                  <div className="kanban-col-sum" style={{ fontSize: 10 }}>Conversão: {stages[0] && stage.id !== stages[0].id ? `${Math.round(((col?.count ?? 0) / Math.max(board[stages[0].id]?.count ?? 0, 1)) * 100)}% da entrada` : "etapa de entrada"}</div>
                   <div
                     className={`kanban-cards ${dragOverStage === stage.id ? "drag-over" : ""}`}
                     onDragOver={(e) => {
@@ -347,6 +373,7 @@ export function PipelineBoard({
                             </span>
                             {cname}
                           </div>
+                          <div className="deal-operational">{deal.channel && <span>{deal.channel.replace("WHATSAPP_", "WA · ")}</span>}{deal.products?.length ? <span>{deal.products.join(", ")}</span> : null}{deal.nextActivity && <span className={new Date(deal.nextActivity.dueAt) < new Date() ? "late" : ""}>Próx.: {deal.nextActivity.title} · {fmtDate(deal.nextActivity.dueAt)}</span>}</div>
                           <div className="deal-card-footer">
                             {owner ? (
                               <span className="contact-row">
@@ -424,6 +451,7 @@ export function PipelineBoard({
           onSetColor={(stageId, color) => run(() => setStageColor(stageId, color))}
           onMoveStage={(stageId, dir) => run(() => moveStage(modal.pipelineId, stageId, dir))}
           onDeleteStage={(stageId) => run(() => deleteStage(modal.pipelineId, stageId))}
+          onConfigureStage={(stageId, input) => run(() => configureStage(stageId, input))}
           onDeletePipeline={() =>
             run(() => deletePipeline(modal.pipelineId)).then(() => {
               setCurrentPipelineId(pipelines.find((p) => p.id !== modal.pipelineId)?.id ?? "");
@@ -651,6 +679,7 @@ function PipelineManageModal({
   onSetColor,
   onMoveStage,
   onDeleteStage,
+  onConfigureStage,
   onDeletePipeline,
 }: {
   pipeline: PipelineDTO;
@@ -664,6 +693,7 @@ function PipelineManageModal({
   onSetColor: (stageId: string, color: string) => void;
   onMoveStage: (stageId: string, dir: -1 | 1) => void;
   onDeleteStage: (stageId: string) => void;
+  onConfigureStage: (stageId: string, input: { requiredFields: string[]; allowedTeams: string[]; requireLossReason: boolean; automationIds: string[] }) => void;
   onDeletePipeline: () => void;
 }) {
   const stages = [...pipeline.stages].sort((a, b) => a.order - b.order);
@@ -717,6 +747,15 @@ function PipelineManageModal({
                   <span className="muted" style={{ fontSize: 11, flexShrink: 0 }}>
                     {count} negócio{count === 1 ? "" : "s"}
                   </span>
+                  <button type="button" className="btn small" disabled={busy} onClick={() => {
+                    const fields = prompt("Campos obrigatórios (title, value, ownerId, expectedClose ou chaves de campos extras), separados por vírgula:", s.requiredFields.join(","));
+                    if (fields === null) return;
+                    const teams = prompt("Times autorizados (vazio = todos), separados por vírgula:", s.allowedTeams.join(","));
+                    if (teams === null) return;
+                    const automations = prompt("IDs de automações associadas a esta etapa (referência), separados por vírgula:", s.automationIds.join(","));
+                    if (automations === null) return;
+                    onConfigureStage(s.id, { requiredFields: fields.split(",").map((v) => v.trim()).filter(Boolean), allowedTeams: teams.split(",").map((v) => v.trim()).filter(Boolean), automationIds: automations.split(",").map((v) => v.trim()).filter(Boolean), requireLossReason: confirm("Exigir motivo de perda para entrar nesta etapa?") });
+                  }}>Regras</button>
                   <button
                     type="button"
                     className="icon-btn"

@@ -32,6 +32,7 @@ model Organization {
   contacts      Contact[]
   opportunities Opportunity[]
   messages      Message[]
+  conversations Conversation[]
   activities    Activity[]
   appointments  Appointment[]
   professionals Professional[]
@@ -43,12 +44,15 @@ model Organization {
   lossReasons   LossReason[]
   opportunityItems OpportunityItem[]
   connections   Connection[]
+  webhookLogs   WebhookLog[]
+  inboundWebhooks InboundWebhook[]
   automations   Automation[]
   mcpConfig     McpConfig?
   customFieldDefinitions CustomFieldDefinition[]
   opportunityStageHistory OpportunityStageHistory[]
   segments     Segment[]
   messageTemplates MessageTemplate[]
+  campaigns        Campaign[]
 
   // Ponteiro do round-robin de atribuição automática de novos contatos (ver
   // assignNextOwner em lib/assignment.ts) — aponta pro último membro que
@@ -67,6 +71,7 @@ model User {
   email        String   @unique
   passwordHash String
   color        String   @default("#4f46e5")
+  team         String   @default("Geral")
   role         Role     @default(MEMBER)
   isSuperAdmin Boolean  @default(false)
   // Membros inativos (ex: de férias) ficam fora do rodízio de atribuição
@@ -81,6 +86,7 @@ model User {
 
   ownedContacts      Contact[]     @relation("ContactOwner")
   ownedOpportunities Opportunity[] @relation("OpportunityOwner")
+  ownedConversations Conversation[] @relation("ConversationOwner")
   sentMessages       Message[]     @relation("MessageSender")
   activities         Activity[]    @relation("ActivityAssignee")
   appointments       Appointment[] @relation("AppointmentOwner")
@@ -319,6 +325,10 @@ model Stage {
   label      String
   color      String
   order      Int
+  requiredFields String @default("[]")
+  allowedTeams String @default("[]")
+  requireLossReason Boolean @default(false)
+  automationIds String @default("[]")
 
   pipelineId String
   pipeline   Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
@@ -364,7 +374,14 @@ model Contact {
   messages      Message[]
   activities    Activity[]
   channels      ContactChannel[]
+  conversations Conversation[]
   appointments  Appointment[]
+  campaignRecipients CampaignRecipient[]
+
+  // Consentimento de comunicação comercial. Opt-out é respeitado tanto nos
+  // disparos manuais em massa quanto nas campanhas agendadas.
+  marketingOptOut   Boolean   @default(false)
+  marketingOptOutAt DateTime?
 
   @@index([organizationId])
   @@index([organizationId, deletedAt, createdAt])
@@ -501,6 +518,7 @@ model Message {
   direction String // "in" (contato->nós) | "out" (nós->contato)
   time      DateTime @default(now())
   status    String   @default("sent") // "sent" | "failed" | "pending" — para envios por canal externo
+  externalMessageId String?
 
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -514,13 +532,62 @@ model Message {
   connectionId String?
   connection   Connection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
 
+  // A mensagem pertence a um atendimento específico (contato + canal/instância).
+  // A coluna continua opcional para manter legível o histórico legado durante a
+  // migração, mas toda mensagem nova passa a ter conversa.
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
   @@index([organizationId])
   @@index([contactId])
   @@index([contactId, time])
+  @@index([conversationId, time])
+  @@index([externalMessageId])
+}
+
+enum ConversationStatus {
+  OPEN
+  CLOSED
+}
+
+// Atendimento individual. Um contato pode ter uma conversa por conexão: por
+// exemplo, WhatsApp Comercial, WhatsApp Suporte e Instagram ficam separados.
+model Conversation {
+  id        String             @id @default(cuid())
+  status    ConversationStatus @default(OPEN)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+  closedAt  DateTime?
+
+  lastMessageAt        DateTime?
+  lastMessageText      String?
+  lastMessageDirection String?
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  // Nulo somente para o histórico importado/legado, sem canal identificado.
+  connectionId String?
+  connection   Connection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+
+  ownerId String?
+  owner   User? @relation("ConversationOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  messages Message[]
+
+  @@index([organizationId, lastMessageAt])
+  @@index([organizationId, ownerId, status])
+  @@unique([contactId, connectionId])
+  @@index([contactId, connectionId])
 }
 
 enum ConnectionProvider {
   WHATSAPP_EVOLUTION
+  WHATSAPP_AZAP
+  WHATSAPP_CLOUD
   INSTAGRAM
   EMAIL
 }
@@ -550,6 +617,45 @@ model Connection {
 
   contactChannels ContactChannel[]
   messages        Message[]
+  conversations   Conversation[]
+  webhookLogs     WebhookLog[]
+  campaigns       Campaign[]
+
+  @@index([organizationId])
+}
+
+// Registro operacional de cada chamada recebida. O payload fica truncado para
+// permitir diagnóstico sem transformar a tabela em arquivo de dados sensíveis.
+model WebhookLog {
+  id         String   @id @default(cuid())
+  source     String
+  event      String?
+  statusCode Int
+  detail     String?
+  payload    String?
+  createdAt  DateTime @default(now())
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  connectionId String?
+  connection   Connection? @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@index([connectionId, createdAt])
+}
+
+// Entrada configurável para formulários e ferramentas externas. O mapping é
+// um JSON com os caminhos do payload para name/phone/email/company/tags.
+model InboundWebhook {
+  id        String   @id @default(cuid())
+  name      String
+  enabled   Boolean  @default(true)
+  mapping   String   @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
 }
@@ -613,6 +719,8 @@ enum AutomationTrigger {
   TAG_ADDED
   MESSAGE_RECEIVED
   WEBHOOK_RECEIVED
+  CONTACT_INACTIVE
+  DATE_REACHED
 }
 
 // Uma automação: um fluxo visual (nós + arestas, no formato do React Flow)
@@ -624,6 +732,9 @@ model Automation {
   trigger       AutomationTrigger
   triggerConfig String            @default("{}") // ex: {"pipelineId":"...","stageId":"..."} para STAGE_CHANGED
   flow          String            @default("{\"nodes\":[],\"edges\":[]}") // { nodes, edges } do React Flow
+  // Usado pelos gatilhos que são verificados por agenda (inatividade/data)
+  // para evitar que a mesma regra dispare novamente a cada minuto.
+  lastTriggeredAt DateTime?
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
 
@@ -699,6 +810,7 @@ model CustomFieldDefinition {
   entity    CustomFieldEntity
   key       String // identificador estável, usado como chave no JSON de valores
   label     String
+  group     String @default("Geral")
   type      CustomFieldType   @default(TEXT)
   options   String            @default("[]") // opções (JSON string[]) quando type = SELECT
   order     Int               @default(0)
@@ -719,12 +831,97 @@ model MessageTemplate {
   name      String
   subject   String? // usado só quando o canal de destino é e-mail
   body      String
+  // Para a API oficial: só modelos aprovados podem ser usados em campanha
+  // fora da janela de atendimento. O nome precisa ser igual ao cadastrado na Meta.
+  cloudApproved     Boolean @default(false)
+  cloudTemplateName String?
+  cloudLanguage     String  @default("pt_BR")
   createdAt DateTime @default(now())
 
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaigns      Campaign[]
 
   @@index([organizationId])
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  RUNNING
+  PAUSED
+  COMPLETED
+  CANCELLED
+}
+
+enum CampaignRecipientStatus {
+  PENDING
+  SENDING
+  SENT
+  DELIVERED
+  READ
+  RESPONDED
+  FAILED
+  SKIPPED
+}
+
+// Campanha sempre faz um snapshot dos destinatários em CampaignRecipient.
+// Assim, uma alteração posterior da lista não muda um disparo já planejado
+// nem permite que o mesmo contato seja enviado duas vezes na mesma campanha.
+model Campaign {
+  id          String         @id @default(cuid())
+  name        String
+  body        String
+  status      CampaignStatus @default(DRAFT)
+  scheduledAt DateTime?
+  startedAt   DateTime?
+  completedAt DateTime?
+  pausedAt    DateTime?
+  nextRunAt   DateTime?
+  // Limite total de destinatários, tamanho de lote e intervalo entre lotes.
+  sendLimit       Int @default(1000)
+  batchSize       Int @default(25)
+  intervalMinutes Int @default(1)
+  duplicateWindowHours Int @default(24)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  connectionId   String
+  connection     Connection @relation(fields: [connectionId], references: [id], onDelete: Restrict)
+  segmentId      String?
+  segment        Segment? @relation(fields: [segmentId], references: [id], onDelete: SetNull)
+  templateId     String?
+  template       MessageTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  recipients CampaignRecipient[]
+
+  @@index([organizationId, status, nextRunAt])
+  @@index([connectionId])
+}
+
+model CampaignRecipient {
+  id       String                  @id @default(cuid())
+  status   CampaignRecipientStatus @default(PENDING)
+  sentAt      DateTime?
+  attemptedAt DateTime?
+  deliveredAt DateTime?
+  readAt      DateTime?
+  respondedAt DateTime?
+  failedAt    DateTime?
+  skippedAt   DateTime?
+  failureReason String?
+  providerMessageId String?
+
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contactId  String
+  contact    Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, contactId])
+  @@index([contactId, sentAt])
+  @@index([providerMessageId])
+  @@index([campaignId, status])
 }
 
 // Lista salva (smart list): um conjunto de critérios reaplicável sobre
@@ -739,6 +936,7 @@ model Segment {
 
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaigns Campaign[]
 
   @@index([organizationId])
 }

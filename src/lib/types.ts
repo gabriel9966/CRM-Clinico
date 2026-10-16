@@ -16,13 +16,17 @@ export type Page<T> = { items: T[]; nextCursor: string | null; total: number | n
 
 export type ContactRowDTO = ContactDTO & { dealsCount: number };
 
-export type DealCardDTO = OpportunityDTO & { contactName: string | null };
+export type DealCardDTO = OpportunityDTO & { contactName: string | null; contactCompany?: string | null; nextActivity?: { title: string; dueAt: string } | null; channel?: string | null; products?: string[] };
 
 export type ConversationRowDTO = {
+  id: string;
   contact: ContactDTO;
   lastText: string | null;
   lastTime: string | null;
   lastDirection: "in" | "out" | null;
+  status: "OPEN" | "CLOSED";
+  ownerId: string | null;
+  channel: ConversationChannelInfo;
 };
 
 export type StageDTO = {
@@ -31,6 +35,10 @@ export type StageDTO = {
   color: string;
   order: number;
   pipelineId: string;
+  requiredFields: string[];
+  allowedTeams: string[];
+  requireLossReason: boolean;
+  automationIds: string[];
 };
 
 export type PipelineDTO = {
@@ -85,12 +93,13 @@ export type MessageDTO = {
   senderId: string | null;
   /** "sent" ou "failed" (o provedor recusou o envio). */
   status: string;
+  conversationId: string | null;
 };
 
 /** Canal pelo qual se pode falar com um contato (WhatsApp, Instagram ou e-mail). */
 export type SendOptionDTO = {
   connectionId: string;
-  provider: "WHATSAPP_EVOLUTION" | "INSTAGRAM" | "EMAIL";
+  provider: "WHATSAPP_EVOLUTION" | "WHATSAPP_AZAP" | "WHATSAPP_CLOUD" | "INSTAGRAM" | "EMAIL";
   label: string;
   /** Conexão ativa agora; desconectada não envia. */
   connected: boolean;
@@ -156,7 +165,7 @@ export type AutomationDTO = {
 
 export type ConnectionDTO = {
   id: string;
-  provider: "WHATSAPP_EVOLUTION" | "INSTAGRAM" | "EMAIL";
+  provider: "WHATSAPP_EVOLUTION" | "WHATSAPP_AZAP" | "WHATSAPP_CLOUD" | "INSTAGRAM" | "EMAIL";
   label: string;
   status: "DISCONNECTED" | "CONNECTING" | "CONNECTED" | "ERROR";
   lastError: string | null;
@@ -168,6 +177,7 @@ export type TeamMemberDTO = {
   name: string;
   email: string;
   color: string;
+  team: string;
   role: "ADMIN" | "MEMBER";
   isActive: boolean;
 };
@@ -177,21 +187,54 @@ export type CustomFieldDefinitionDTO = {
   entity: "CONTACT" | "OPPORTUNITY";
   key: string;
   label: string;
+  group: string;
   type: "TEXT" | "NUMBER" | "DATE" | "BOOLEAN" | "SELECT";
   options: string[];
   order: number;
 };
 
 export type ConversationChannelInfo = {
-  provider: "WHATSAPP_EVOLUTION" | "INSTAGRAM" | "EMAIL";
+  provider: "WHATSAPP_EVOLUTION" | "WHATSAPP_AZAP" | "WHATSAPP_CLOUD" | "INSTAGRAM" | "EMAIL";
   label: string;
   externalName: string | null;
+  connectionId: string;
 } | null;
+
+export type ConversationEventDTO = {
+  id: string;
+  action: "assigned" | "transferred" | "claimed" | "closed" | "reopened" | "tag_added" | "tag_removed";
+  actorName: string | null;
+  detail: string;
+  createdAt: string;
+};
 
 export type MessageTemplateDTO = {
   id: string;
   name: string;
   subject: string | null;
   body: string;
+  cloudApproved: boolean;
+  cloudTemplateName: string | null;
+  cloudLanguage: string;
   createdAt: string;
+};
+
+export type CampaignDTO = {
+  id: string;
+  name: string;
+  body: string;
+  status: "DRAFT" | "SCHEDULED" | "RUNNING" | "PAUSED" | "COMPLETED" | "CANCELLED";
+  scheduledAt: string | null;
+  createdAt: string;
+  connectionId: string;
+  connectionLabel: string;
+  connectionProvider: ConnectionDTO["provider"];
+  segmentId: string | null;
+  segmentName: string | null;
+  sendLimit: number;
+  batchSize: number;
+  intervalMinutes: number;
+  duplicateWindowHours: number;
+  metrics: { total: number; pending: number; sent: number; delivered: number; read: number; responded: number; failed: number; skipped: number; conversions: number };
+  recipients: Array<{ id: string; contactId: string; contactName: string; status: string; failureReason: string | null; sentAt: string | null; optedOut: boolean }>;
 };

@@ -5,6 +5,8 @@ import { assignNextOwner } from "@/lib/assignment";
 import { guardWebhook } from "@/lib/webhook-auth";
 import { ensureLiveContact } from "@/lib/inbound";
 import { createMessage } from "@/lib/messages";
+import { logWebhook } from "@/lib/webhook-log";
+import { markCampaignResponse } from "@/lib/campaigns";
 
 // Recebe eventos da instância Evolution API do usuário (configurados em
 // /connections) e grava as mensagens recebidas como Message + Contact no CRM.
@@ -106,7 +108,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ con
 
   if (!fromMe) {
     await triggerAutomations(organizationId, "MESSAGE_RECEIVED", { contactId });
+    await markCampaignResponse(organizationId, contactId, connectionId);
   }
+
+  await logWebhook({ organizationId, connectionId, source: "evolution", event, statusCode: 200, payload: body });
 
   return NextResponse.json({ ok: true });
 }

@@ -1,0 +1,4 @@
+ALTER TABLE "Stage" ADD COLUMN "requiredFields" TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE "Stage" ADD COLUMN "allowedTeams" TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE "Stage" ADD COLUMN "requireLossReason" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "Stage" ADD COLUMN "automationIds" TEXT NOT NULL DEFAULT '[]';

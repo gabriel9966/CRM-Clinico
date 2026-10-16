@@ -12,7 +12,35 @@ const PREVIEW_MAX = 200;
  * webhook com timestamp antigo) não sobrescreve.
  */
 export async function createMessage(db: DbClient, data: Prisma.MessageUncheckedCreateInput) {
-  const message = await db.message.create({ data });
+  // Toda mensagem nova fica em um atendimento próprio por canal/instância.
+  // Para o legado sem connectionId existe uma conversa sem canal identificada.
+  let conversationId = data.conversationId ?? null;
+  if (!conversationId) {
+    const existing = await db.conversation.findFirst({
+      where: {
+        organizationId: data.organizationId,
+        contactId: data.contactId,
+        connectionId: data.connectionId ?? null,
+      },
+      select: { id: true },
+    });
+    if (existing) {
+      conversationId = existing.id;
+    } else {
+      const contact = await db.contact.findFirst({ where: { id: data.contactId, organizationId: data.organizationId }, select: { ownerId: true } });
+      const conversation = await db.conversation.create({
+        data: {
+          organizationId: data.organizationId,
+          contactId: data.contactId,
+          connectionId: data.connectionId ?? null,
+          ownerId: contact?.ownerId ?? null,
+        },
+        select: { id: true },
+      });
+      conversationId = conversation.id;
+    }
+  }
+  const message = await db.message.create({ data: { ...data, conversationId } });
   await db.contact.updateMany({
     where: {
       id: message.contactId,
@@ -23,6 +51,20 @@ export async function createMessage(db: DbClient, data: Prisma.MessageUncheckedC
       lastMessageAt: message.time,
       lastMessageText: message.text.slice(0, PREVIEW_MAX),
       lastMessageDirection: message.direction,
+    },
+  });
+  await db.conversation.updateMany({
+    where: {
+      id: conversationId,
+      organizationId: message.organizationId,
+      OR: [{ lastMessageAt: null }, { lastMessageAt: { lte: message.time } }],
+    },
+    data: {
+      lastMessageAt: message.time,
+      lastMessageText: message.text.slice(0, PREVIEW_MAX),
+      lastMessageDirection: message.direction,
+      // Uma resposta recebida reabre o atendimento automaticamente.
+      ...(message.direction === "in" ? { status: "OPEN", closedAt: null } : {}),
     },
   });
   return message;

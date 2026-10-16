@@ -569,16 +569,41 @@ describe.skipIf(!url)("integração com Postgres real", () => {
       expect(first.lastTime).toBe(new Date(T0 + 5 * 60_000).toISOString());
     });
 
-    it("conversas: membro só vê as dele; busca acha contato sem conversa; org isolada", async () => {
+    it("conversas: membro só vê as dele; busca só acha atendimentos reais; org isolada", async () => {
       // contactIds[20..24]: pares → ownerA (20,22,24), ímpares → ownerB (21,23)
       const mineA = await q.getConversationsPage(qOrg, { restrictToOwnerId: ownerA });
       expect(mineA.items.map((r) => r.contact.id).sort()).toEqual([contactIds[20], contactIds[22], contactIds[24]].sort());
 
-      const search = await q.getConversationsPage(qOrg, { q: "Paciente 100" });
-      expect(search.items.map((r) => r.contact.name)).toEqual(["Paciente 100"]);
-      expect(search.items[0].lastTime).toBeNull();
+      // a lista é de ATENDIMENTOS (contato + canal, com mensagem): contato sem conversa não aparece
+      expect((await q.getConversationsPage(qOrg, { q: "Paciente 100" })).items).toEqual([]);
+      const found = await q.getConversationsPage(qOrg, { q: "Paciente 020" });
+      expect(found.items.map((r) => r.contact.name)).toEqual(["Paciente 020"]);
 
       expect((await q.getConversationsPage(qOrg2)).items).toEqual([]);
+    });
+
+    // Regressão de segurança: o filtro de responsável vem do navegador. Antes ele
+    // sobrescrevia a restrição do atendente comum, e dava para ler conversa de colega.
+    it("conversas: a restrição do atendente comum NÃO pode ser sobrescrita pelo filtro de responsável", async () => {
+      // ownerB tem os contatos ímpares (21, 23); ownerA pede "ownerId: ownerB"
+      const hijack = await q.getConversationsPage(qOrg, { restrictToOwnerId: ownerA, ownerId: ownerB });
+      expect(hijack.items).toEqual([]);
+      const same = await q.getConversationsPage(qOrg, { restrictToOwnerId: ownerA, ownerId: ownerA });
+      expect(same.items).toHaveLength(3);
+      // sem restrição (administrador) o filtro funciona normalmente
+      const admin = await q.getConversationsPage(qOrg, { ownerId: ownerB });
+      expect(admin.items.map((r) => r.contact.id).sort()).toEqual([contactIds[21], contactIds[23]].sort());
+    });
+
+    it("conversas: filtros combinados (tag + busca) valem juntos, não um apaga o outro", async () => {
+      const { prismaRaw } = m;
+      await prismaRaw.contact.update({ where: { id: contactIds[20] }, data: { tags: JSON.stringify(["Retorno"]) } });
+      await prismaRaw.contact.update({ where: { id: contactIds[21] }, data: { tags: JSON.stringify(["Retorno"]) } });
+      const both = await q.getConversationsPage(qOrg, { tag: "Retorno", q: "Paciente 020" });
+      expect(both.items.map((r) => r.contact.name)).toEqual(["Paciente 020"]); // tag casa nos dois, a busca só em um
+      const onlyTag = await q.getConversationsPage(qOrg, { tag: "Retorno" });
+      expect(onlyTag.items).toHaveLength(2);
+      expect((await q.getConversationsPage(qOrg, { tag: "Retor" })).items).toEqual([]); // tag exata, não pedaço
     });
 
     it("mensagens: página mais recente em ordem cronológica, cursor traz as anteriores; membro alheio bloqueado", async () => {

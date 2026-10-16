@@ -7,6 +7,7 @@ import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { verifyMetaSignature } from "@/lib/webhook-auth";
 import { ensureLiveContact } from "@/lib/inbound";
 import { createMessage } from "@/lib/messages";
+import { logWebhook } from "@/lib/webhook-log";
 
 // Webhook único para todas as conexões de Instagram (a Meta exige uma URL fixa
 // por App cadastrado no Meta for Developers — a instância é identificada pelo
@@ -107,6 +108,7 @@ export async function POST(req: NextRequest) {
     if (!isEcho) {
       await triggerAutomations(organizationId, "MESSAGE_RECEIVED", { contactId });
     }
+    await logWebhook({ organizationId, connectionId: connection.id, source: "instagram", event: "messaging", statusCode: 200, payload: event });
   }
 
   return NextResponse.json({ ok: true });

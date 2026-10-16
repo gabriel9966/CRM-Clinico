@@ -355,6 +355,46 @@ function TriggerInspector({
         </div>
       )}
 
+      {trigger === "CONTACT_INACTIVE" && (
+        <>
+          <div className="field">
+            <label>Sem interação por (dias)</label>
+            <input
+              type="number"
+              min={1}
+              max={3650}
+              value={Number(config.inactivityDays ?? 3)}
+              onChange={(e) => onChange({ inactivityDays: Math.max(1, Number(e.target.value) || 1) })}
+            />
+          </div>
+          <div className="field">
+            <label>Repetir para o mesmo contato a cada (horas)</label>
+            <input
+              type="number"
+              min={1}
+              max={720}
+              value={Number(config.repeatHours ?? 24)}
+              onChange={(e) => onChange({ repeatHours: Math.max(1, Number(e.target.value) || 1) })}
+            />
+          </div>
+          <p className="muted" style={{ fontSize: 12 }}>A inatividade é calculada pela última mensagem. A regra é verificada a cada minuto.</p>
+        </>
+      )}
+
+      {trigger === "DATE_REACHED" && (
+        <>
+          <div className="field">
+            <label>Executar em</label>
+            <input
+              type="datetime-local"
+              value={typeof config.dateAt === "string" ? config.dateAt.slice(0, 16) : ""}
+              onChange={(e) => onChange({ dateAt: e.target.value ? new Date(e.target.value).toISOString() : undefined })}
+            />
+          </div>
+          <p className="muted" style={{ fontSize: 12 }}>A regra é disparada uma única vez, no primeiro ciclo após a data e hora escolhidas.</p>
+        </>
+      )}
+
       {(trigger === "CONTACT_CREATED" || trigger === "OPPORTUNITY_CREATED" || trigger === "MESSAGE_RECEIVED") && (
         <p className="muted" style={{ fontSize: 12 }}>Este gatilho não precisa de configuração extra.</p>
       )}

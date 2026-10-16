@@ -39,4 +39,6 @@ export const TRIGGER_LABEL: Record<string, string> = {
   TAG_ADDED: "Tag adicionada ao contato",
   MESSAGE_RECEIVED: "Mensagem recebida",
   WEBHOOK_RECEIVED: "Webhook recebido (HTTP externo)",
+  CONTACT_INACTIVE: "Contato sem interação",
+  DATE_REACHED: "Data e horário programados",
 };

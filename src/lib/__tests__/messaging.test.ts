@@ -37,6 +37,8 @@ function setup(over: { contact?: unknown; channels?: unknown[]; connections?: un
   mockPrisma.contactChannel.create.mockResolvedValue({});
   mockPrisma.message.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({ id: "m1", time: NOW, ...data }));
   mockPrisma.contact.updateMany.mockResolvedValue({ count: 1 });
+  mockPrisma.conversation.findFirst.mockResolvedValue({ id: "cv-1" });
+  mockPrisma.conversation.updateMany.mockResolvedValue({ count: 1 });
 }
 
 beforeEach(() => {

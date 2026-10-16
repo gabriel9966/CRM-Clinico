@@ -12,7 +12,7 @@ import { clientIp, rateLimit } from "./rate-limit";
 // continuam aceitas até WEBHOOK_REQUIRE_TOKEN=true. Token presente e errado é
 // sempre recusado.
 
-export type WebhookKind = "evolution" | "email" | "automation";
+export type WebhookKind = "evolution" | "email" | "azap" | "inbound" | "automation";
 
 function secret(): string {
   const s = process.env.CONNECTIONS_SECRET;

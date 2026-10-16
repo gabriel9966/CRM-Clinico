@@ -96,6 +96,7 @@ function contactSearchWhere(q: string): Prisma.ContactWhereInput {
 export type ContactListQuery = {
   q?: string;
   ownerId?: string;
+  team?: string;
   tag?: string;
   ids?: string[];
   cursor?: string;
@@ -109,7 +110,8 @@ export async function getContactsPage(organizationId: string, query: ContactList
   const q = query.q?.trim();
   const where: Prisma.ContactWhereInput = {
     organizationId,
-    ...(query.ownerId ? { ownerId: query.ownerId } : {}),
+    ...(query.ownerId === "unassigned" ? { ownerId: null } : query.ownerId ? { ownerId: query.ownerId } : {}),
+    ...(query.team ? { owner: { team: query.team } } : {}),
     ...(query.tag ? { tags: { contains: JSON.stringify(query.tag) } } : {}),
     ...(query.ids ? { id: { in: query.ids } } : {}),
     ...(q ? contactSearchWhere(q) : {}),
@@ -215,7 +217,7 @@ export async function getContactDetail(organizationId: string, viewer: Viewer, c
   };
 }
 
-function toMessageDTO(m: { id: string; text: string; direction: string; time: Date; contactId: string; senderId: string | null; status: string }): MessageDTO {
+function toMessageDTO(m: { id: string; text: string; direction: string; time: Date; contactId: string; senderId: string | null; status: string; conversationId?: string | null }): MessageDTO {
   return {
     id: m.id,
     text: m.text,
@@ -224,6 +226,7 @@ function toMessageDTO(m: { id: string; text: string; direction: string; time: Da
     contactId: m.contactId,
     senderId: m.senderId,
     status: m.status,
+    conversationId: m.conversationId ?? null,
   };
 }
 
@@ -240,7 +243,21 @@ function decodeCursor(cursor: string): { t: Date; id: string } | null {
   }
 }
 
-export type ConversationQuery = { restrictToOwnerId?: string; q?: string; cursor?: string; limit?: number };
+export type ConversationQuery = {
+  restrictToOwnerId?: string;
+  q?: string;
+  cursor?: string;
+  limit?: number;
+  ownerId?: string;
+  team?: string;
+  connectionId?: string;
+  provider?: "WHATSAPP_EVOLUTION" | "WHATSAPP_AZAP" | "WHATSAPP_CLOUD" | "INSTAGRAM" | "EMAIL";
+  tag?: string;
+  stageId?: string;
+  status?: "OPEN" | "CLOSED" | "ALL";
+  from?: string;
+  to?: string;
+};
 
 /**
  * Lista de conversas: contatos com mensagem, da mais recente para a mais antiga.
@@ -250,45 +267,53 @@ export type ConversationQuery = { restrictToOwnerId?: string; q?: string; cursor
 export async function getConversationsPage(organizationId: string, query: ConversationQuery = {}): Promise<Page<ConversationRowDTO>> {
   const limit = clampLimit(query.limit, 30, 60);
   const q = query.q?.trim();
-  const base: Prisma.ContactWhereInput = {
-    organizationId,
-    ...(query.restrictToOwnerId ? { ownerId: query.restrictToOwnerId } : {}),
-  };
+  const from = query.from ? new Date(`${query.from}T00:00:00.000Z`) : null;
+  const to = query.to ? new Date(`${query.to}T23:59:59.999Z`) : null;
+  // Cada filtro é uma cláusula separada combinada com AND. Antes eram chaves de
+  // um mesmo objeto: o filtro de responsável vindo do cliente SOBRESCREVIA a
+  // restrição do atendente comum (ver o ownerId abaixo), e dois filtros sobre
+  // `contact` (tag + busca) se apagavam. Com AND a restrição é inviolável.
+  const clauses: Prisma.ConversationWhereInput[] = [{ organizationId }];
+  if (query.restrictToOwnerId) clauses.push({ ownerId: query.restrictToOwnerId }); // sempre vale
+  if (query.ownerId === "unassigned") clauses.push({ ownerId: null });
+  else if (query.ownerId) clauses.push({ ownerId: query.ownerId });
+  if (query.team) clauses.push({ owner: { team: query.team } });
+  if (query.connectionId) clauses.push({ connectionId: query.connectionId });
+  if (query.provider) clauses.push({ connection: { provider: query.provider } });
+  if (query.status && query.status !== "ALL") clauses.push({ status: query.status });
+  if (query.tag) clauses.push({ contact: { tags: { contains: JSON.stringify(query.tag) } } });
+  if (query.stageId) clauses.push({ contact: { opportunities: { some: { stageId: query.stageId, deletedAt: null } } } });
+  if (q) clauses.push({ contact: contactSearchWhere(q) });
+  clauses.push({ lastMessageAt: { not: null, ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } });
 
-  let rows: Awaited<ReturnType<typeof prisma.contact.findMany>>;
   let nextCursor: string | null = null;
-
-  if (q) {
-    rows = await prisma.contact.findMany({
-      where: { ...base, ...contactSearchWhere(q) },
-      orderBy: [{ lastMessageAt: { sort: "desc", nulls: "last" } }, { id: "desc" }],
-      take: limit,
-    });
-  } else {
-    const cur = query.cursor ? decodeCursor(query.cursor) : null;
-    const found = await prisma.contact.findMany({
-      where: {
-        ...base,
-        lastMessageAt: { not: null },
-        ...(cur ? { OR: [{ lastMessageAt: { lt: cur.t } }, { lastMessageAt: cur.t, id: { lt: cur.id } }] } : {}),
-      },
-      orderBy: [{ lastMessageAt: "desc" }, { id: "desc" }],
-      take: limit + 1,
-    });
-    const hasMore = found.length > limit;
-    rows = hasMore ? found.slice(0, limit) : found;
-    if (hasMore) {
-      const last = rows[rows.length - 1];
-      nextCursor = encodeCursor(last.lastMessageAt!, last.id);
-    }
+  const cur = query.cursor ? decodeCursor(query.cursor) : null;
+  if (cur) clauses.push({ OR: [{ lastMessageAt: { lt: cur.t } }, { lastMessageAt: cur.t, id: { lt: cur.id } }] });
+  const found = await prisma.conversation.findMany({
+    where: { AND: clauses },
+    include: { contact: true, connection: true },
+    orderBy: [{ lastMessageAt: "desc" }, { id: "desc" }],
+    take: limit + 1,
+  });
+  const hasMore = found.length > limit;
+  const rows = hasMore ? found.slice(0, limit) : found;
+  if (hasMore) {
+    const last = rows[rows.length - 1];
+    nextCursor = encodeCursor(last.lastMessageAt!, last.id);
   }
 
   return {
-    items: rows.map((c) => ({
-      contact: toContactDTO(c),
-      lastText: c.lastMessageText,
-      lastTime: c.lastMessageAt ? c.lastMessageAt.toISOString() : null,
-      lastDirection: (c.lastMessageDirection as "in" | "out" | null) ?? null,
+    items: rows.map((conversation) => ({
+      id: conversation.id,
+      contact: toContactDTO(conversation.contact),
+      lastText: conversation.lastMessageText,
+      lastTime: conversation.lastMessageAt ? conversation.lastMessageAt.toISOString() : null,
+      lastDirection: (conversation.lastMessageDirection as "in" | "out" | null) ?? null,
+      status: conversation.status,
+      ownerId: conversation.ownerId,
+      channel: conversation.connection
+        ? { provider: conversation.connection.provider as "WHATSAPP_EVOLUTION" | "WHATSAPP_AZAP" | "WHATSAPP_CLOUD" | "INSTAGRAM" | "EMAIL", label: conversation.connection.label, externalName: null, connectionId: conversation.connection.id }
+        : null,
     })),
     nextCursor,
     total: null,
@@ -303,16 +328,38 @@ export async function getChannelsFor(organizationId: string, contactIds: string[
     include: { connection: true },
     orderBy: { createdAt: "desc" },
   });
-  const byContact: Record<string, { provider: "WHATSAPP_EVOLUTION" | "INSTAGRAM" | "EMAIL"; label: string; externalName: string | null }> = {};
+  const byContact: Record<string, { provider: "WHATSAPP_EVOLUTION" | "WHATSAPP_AZAP" | "WHATSAPP_CLOUD" | "INSTAGRAM" | "EMAIL"; label: string; externalName: string | null; connectionId: string }> = {};
   for (const ch of channels) {
     if (byContact[ch.contactId]) continue; // o mais recente por contato
     byContact[ch.contactId] = {
-      provider: ch.connection.provider as "WHATSAPP_EVOLUTION" | "INSTAGRAM" | "EMAIL",
+      provider: ch.connection.provider as "WHATSAPP_EVOLUTION" | "WHATSAPP_AZAP" | "WHATSAPP_CLOUD" | "INSTAGRAM" | "EMAIL",
       label: ch.connection.label,
       externalName: ch.externalName,
+      connectionId: ch.connection.id,
     };
   }
   return byContact;
+}
+
+/** Mensagens de um atendimento específico, sempre isoladas por canal/instância. */
+export async function getConversationMessagesPage(
+  organizationId: string,
+  viewer: Viewer,
+  conversationId: string,
+  opts: { cursor?: string; limit?: number } = {}
+): Promise<Page<MessageDTO> | null> {
+  const conversation = await prisma.conversation.findFirst({ where: { id: conversationId, organizationId }, select: { ownerId: true } });
+  if (!conversation || (viewer.role !== "ADMIN" && conversation.ownerId !== viewer.id)) return null;
+  const limit = clampLimit(opts.limit, 40, 100);
+  const rows = await prisma.message.findMany({
+    where: { organizationId, conversationId },
+    orderBy: [{ time: "desc" }, { id: "desc" }],
+    take: limit + 1,
+    ...(opts.cursor ? { cursor: { id: opts.cursor }, skip: 1 } : {}),
+  });
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  return { items: page.reverse().map(toMessageDTO), nextCursor: hasMore ? page[0].id : null, total: null };
 }
 
 /**
@@ -373,7 +420,7 @@ export async function getStageSummaries(organizationId: string, pipelineId: stri
   return grouped.map((g) => ({ stageId: g.stageId, count: g._count._all, sum: g._sum.value ?? 0 }));
 }
 
-export type StageCardsQuery = { ownerId?: string; q?: string; cursor?: string; limit?: number };
+export type StageCardsQuery = { ownerId?: string; q?: string; tag?: string; overdue?: boolean; sort?: "newest" | "value" | "close"; cursor?: string; limit?: number };
 
 export async function getStageCards(organizationId: string, stageId: string, query: StageCardsQuery = {}): Promise<Page<DealCardDTO>> {
   const limit = clampLimit(query.limit, 30, 60);
@@ -383,17 +430,19 @@ export async function getStageCards(organizationId: string, stageId: string, que
       organizationId,
       stageId,
       ...(query.ownerId ? { ownerId: query.ownerId } : {}),
+      ...(query.tag ? { tags: { contains: JSON.stringify(query.tag) } } : {}),
+      ...(query.overdue ? { expectedClose: { lt: new Date() } } : {}),
       ...(q ? { OR: [{ title: contains(q) }, { contact: { name: contains(q) } }] } : {}),
     },
-    include: { contact: { select: { name: true } } },
-    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    include: { contact: { select: { name: true, company: true, channels: { include: { connection: { select: { provider: true } } }, take: 1 } } }, activities: { where: { done: false }, orderBy: { dueAt: "asc" }, take: 1, select: { title: true, dueAt: true } }, items: { select: { name: true }, take: 3 } },
+    orderBy: query.sort === "value" ? [{ value: "desc" }, { id: "desc" }] : query.sort === "close" ? [{ expectedClose: "asc" }, { id: "desc" }] : [{ createdAt: "desc" }, { id: "desc" }],
     take: limit + 1,
     ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
   });
   const hasMore = rows.length > limit;
   const page = hasMore ? rows.slice(0, limit) : rows;
   return {
-    items: page.map((o) => ({ ...toOpportunityDTO(o), contactName: o.contact?.name ?? null })),
+    items: page.map((o) => ({ ...toOpportunityDTO(o), contactName: o.contact?.name ?? null, contactCompany: o.contact?.company ?? null, nextActivity: o.activities[0] ? { title: o.activities[0].title, dueAt: o.activities[0].dueAt.toISOString() } : null, channel: o.contact?.channels[0]?.connection.provider ?? null, products: o.items.map((item) => item.name) })),
     nextCursor: hasMore ? page[page.length - 1].id : null,
     total: null,
   };
@@ -408,13 +457,13 @@ export type StageColumnDTO = { count: number; sum: number; cards: DealCardDTO[];
 export async function getPipelineBoard(
   organizationId: string,
   pipelineId: string,
-  filters: { ownerId?: string; q?: string } = {}
+  filters: { ownerId?: string; q?: string; tag?: string; overdue?: boolean; sort?: "newest" | "value" | "close" } = {}
 ): Promise<Record<string, StageColumnDTO>> {
   const stages = await prisma.stage.findMany({ where: { pipelineId, pipeline: { organizationId } }, select: { id: true } });
   if (stages.length === 0) return {};
 
   const q = filters.q?.trim();
-  const filtered = Boolean(filters.ownerId || q);
+  const filtered = Boolean(filters.ownerId || q || filters.tag || filters.overdue);
   const [summaries, pages, filteredSummaries] = await Promise.all([
     getStageSummaries(organizationId, pipelineId),
     Promise.all(stages.map((s) => getStageCards(organizationId, s.id, filters))),
@@ -426,6 +475,8 @@ export async function getPipelineBoard(
             organizationId,
             pipelineId,
             ...(filters.ownerId ? { ownerId: filters.ownerId } : {}),
+            ...(filters.tag ? { tags: { contains: JSON.stringify(filters.tag) } } : {}),
+            ...(filters.overdue ? { expectedClose: { lt: new Date() } } : {}),
             ...(q ? { OR: [{ title: contains(q) }, { contact: { name: contains(q) } }] } : {}),
           },
           _count: { _all: true },

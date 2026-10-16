@@ -3,12 +3,13 @@
 import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { requireOrgUser } from "@/lib/auth";
+import { requireAdminUser, requireOrgUser } from "@/lib/auth";
 import { triggerAutomations } from "@/lib/automation/engine";
 import { parseCsv } from "@/lib/csv";
 import { recordStageChange } from "@/lib/pipeline-history";
 import { actorOf, audit } from "@/lib/audit";
 import { softDeleteOpportunity } from "@/lib/soft-delete";
+import { syncTags } from "@/lib/crm-catalog";
 import type { ImportSummary } from "@/app/contacts/actions";
 
 const DEFAULT_STAGES = [
@@ -91,6 +92,14 @@ export async function setStageColor(stageId: string, color: string) {
   revalidatePath("/pipeline");
 }
 
+export async function configureStage(stageId: string, input: { requiredFields: string[]; allowedTeams: string[]; requireLossReason: boolean; automationIds: string[] }) {
+  const { organizationId } = await requireAdminUser();
+  const stage = await prisma.stage.findFirst({ where: { id: stageId, pipeline: { organizationId } } });
+  if (!stage) return;
+  await prisma.stage.update({ where: { id: stageId }, data: { requiredFields: JSON.stringify(input.requiredFields.filter(Boolean)), allowedTeams: JSON.stringify(input.allowedTeams.filter(Boolean)), requireLossReason: input.requireLossReason, automationIds: JSON.stringify(input.automationIds.filter(Boolean)) } });
+  revalidatePath("/pipeline");
+}
+
 export async function moveStage(pipelineId: string, stageId: string, direction: -1 | 1) {
   const { organizationId } = await requireOrgUser();
   if (!(await assertPipelineInOrg(pipelineId, organizationId))) return;
@@ -167,9 +176,28 @@ async function assertOpportunityRefs(organizationId: string, data: OpportunityIn
   return lossReason;
 }
 
+async function assertStagePolicy(stageId: string, data: OpportunityInput, user: Awaited<ReturnType<typeof requireOrgUser>>) {
+  const stage = await prisma.stage.findUnique({ where: { id: stageId }, select: { requiredFields: true, allowedTeams: true, requireLossReason: true } });
+  if (!stage) return;
+  const parse = (raw: string) => { try { const v = JSON.parse(raw); return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []; } catch { return []; } };
+  const teams = parse(stage.allowedTeams);
+  if (user.role !== "ADMIN" && teams.length && !teams.includes(user.team)) throw new Error("Seu time não tem permissão para esta etapa.");
+  if (stage.requireLossReason && !data.lossReasonId) throw new Error("Informe o motivo de perda para mover a oportunidade a esta etapa.");
+  const missing = parse(stage.requiredFields).filter((field) => {
+    if (field === "title") return !data.title.trim();
+    if (field === "value") return !Number.isFinite(data.value) || data.value <= 0;
+    if (field === "ownerId") return !data.ownerId;
+    if (field === "expectedClose") return !data.expectedClose;
+    return data.customFields?.[field] === undefined || data.customFields?.[field] === "";
+  });
+  if (missing.length) throw new Error(`Preencha os campos obrigatórios: ${missing.join(", ")}.`);
+}
+
 export async function createOpportunity(data: OpportunityInput) {
-  const { organizationId } = await requireOrgUser();
+  const user = await requireOrgUser(); const { organizationId } = user;
   const lossReason = await assertOpportunityRefs(organizationId, data);
+  await assertStagePolicy(data.stageId, data, user);
+  await syncTags(organizationId, data.tags);
   const opp = await prisma.opportunity.create({
     data: {
       organizationId,
@@ -197,10 +225,12 @@ export async function createOpportunity(data: OpportunityInput) {
 }
 
 export async function updateOpportunity(id: string, data: OpportunityInput) {
-  const { organizationId } = await requireOrgUser();
+  const user = await requireOrgUser(); const { organizationId } = user;
   const before = await prisma.opportunity.findFirst({ where: { id, organizationId } });
   if (!before) return;
   const lossReason = await assertOpportunityRefs(organizationId, data);
+  await assertStagePolicy(data.stageId, data, user);
+  await syncTags(organizationId, data.tags);
 
   const opp = await prisma.opportunity.update({
     where: { id },
@@ -319,6 +349,7 @@ export async function importOpportunitiesCsv(csvText: string, defaultPipelineId:
 
     const owner = row.owner ? team.find((m) => m.name.toLowerCase() === row.owner.toLowerCase()) : undefined;
     const tags = (row.tags || "").split(";").map((t) => t.trim()).filter(Boolean);
+    await syncTags(organizationId, tags);
     const value = Number(row.value);
 
     const newOpp = await prisma.opportunity.create({
@@ -343,7 +374,7 @@ export async function importOpportunitiesCsv(csvText: string, defaultPipelineId:
 }
 
 export async function moveOpportunityStage(id: string, stageId: string) {
-  const { organizationId } = await requireOrgUser();
+  const user = await requireOrgUser(); const { organizationId } = user;
   const existing = await prisma.opportunity.findFirst({ where: { id, organizationId } });
   if (!existing) return;
   // A etapa de destino precisa ser do mesmo pipeline (e da mesma organização).
@@ -352,6 +383,8 @@ export async function moveOpportunityStage(id: string, stageId: string) {
     select: { id: true },
   });
   if (!target) throw new Error("Etapa inválida para este pipeline.");
+
+  await assertStagePolicy(stageId, { title: existing.title, value: existing.value, tags: [], contactId: existing.contactId, pipelineId: existing.pipelineId, stageId, ownerId: existing.ownerId, expectedClose: existing.expectedClose?.toISOString() ?? null, lossReasonId: existing.lossReasonId, customFields: existing.customFields as Record<string, unknown> }, user);
 
   const opp = await prisma.opportunity.update({ where: { id }, data: { stageId } });
   await recordStageChange(prisma, { organizationId, opportunityId: opp.id, newStageId: opp.stageId });

@@ -29,6 +29,7 @@ export function createMockPrisma() {
     stage: makeModel(),
     opportunity: makeModel(),
     message: makeModel(),
+    conversation: makeModel(),
     activity: makeModel(),
     appointment: makeModel(),
     connection: makeModel(),
@@ -42,6 +43,10 @@ export function createMockPrisma() {
     room: makeModel(),
     scheduleBlock: makeModel(),
     auditLog: makeModel(),
+    webhookLog: makeModel(),
+    inboundWebhook: makeModel(),
+    campaign: makeModel(),
+    campaignRecipient: makeModel(),
     // O mock não tem transação real: executa o callback com o próprio mock.
     $transaction: vi.fn(),
     $queryRaw: vi.fn(),

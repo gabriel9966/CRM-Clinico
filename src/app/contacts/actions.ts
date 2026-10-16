@@ -108,6 +108,29 @@ export async function deleteContact(id: string) {
   revalidatePath("/conversations");
 }
 
+/** Ações em lote da tabela de leads; ids são sempre restringidos ao tenant atual. */
+export async function bulkUpdateContacts(ids: string[], input: { ownerId?: string | null; addTags?: string[]; removeTags?: string[]; delete?: boolean }) {
+  const user = await requireOrgUser();
+  const contactIds = [...new Set(ids)].slice(0, 500);
+  if (!contactIds.length) return;
+  if (input.delete) {
+    await softDeleteContacts(prisma, user.organizationId, contactIds);
+  } else {
+    const contacts = await prisma.contact.findMany({ where: { id: { in: contactIds }, organizationId: user.organizationId }, select: { id: true, tags: true } });
+    if (input.ownerId !== undefined) await prisma.contact.updateMany({ where: { id: { in: contacts.map((c) => c.id) }, organizationId: user.organizationId }, data: { ownerId: input.ownerId } });
+    if (input.addTags?.length || input.removeTags?.length) {
+      for (const contact of contacts) {
+        const tags = new Set(parseTags(contact.tags));
+        for (const tag of input.addTags ?? []) tags.add(tag);
+        for (const tag of input.removeTags ?? []) tags.delete(tag);
+        await prisma.contact.update({ where: { id: contact.id }, data: { tags: JSON.stringify([...tags]) } });
+      }
+      await syncTags(user.organizationId, input.addTags ?? []);
+    }
+  }
+  revalidatePath("/contacts"); revalidatePath("/pipeline"); revalidatePath("/conversations");
+}
+
 // Mescla um ou mais contatos (mergeIds) dentro do contato sobrevivente
 // (keepId): repõe mensagens/atividades/agendamentos/oportunidades para o
 // sobrevivente, une tags/notas, preenche campos vazios do sobrevivente com

@@ -7,6 +7,7 @@ import { requireOrgUser } from "@/lib/auth";
 export type CustomFieldInput = {
   entity: "CONTACT" | "OPPORTUNITY";
   label: string;
+  group?: string;
   type: "TEXT" | "NUMBER" | "DATE" | "BOOLEAN" | "SELECT";
   options: string[];
 };
@@ -45,6 +46,7 @@ export async function createCustomField(data: CustomFieldInput) {
       entity: data.entity,
       key,
       label,
+      group: data.group?.trim() || "Geral",
       type: data.type,
       options: JSON.stringify(data.type === "SELECT" ? data.options.filter(Boolean) : []),
       order: (last?.order ?? -1) + 1,

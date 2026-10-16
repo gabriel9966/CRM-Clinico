@@ -17,7 +17,7 @@ import type {
   SegmentDTO,
   Page,
 } from "@/lib/types";
-import { createContact, updateContact, deleteContact, importContactsCsv, mergeContacts, type ContactInput } from "@/app/contacts/actions";
+import { createContact, updateContact, deleteContact, importContactsCsv, mergeContacts, bulkUpdateContacts, type ContactInput } from "@/app/contacts/actions";
 import { createSegment, deleteSegment } from "@/app/segments/actions";
 import { fetchContactsPage, fetchContactDetail, fetchDuplicateGroups } from "@/app/listings/actions";
 import { CustomFieldInputs, readCustomFieldValues } from "@/components/shared/CustomFieldInputs";
@@ -81,6 +81,7 @@ export function ContactsView({
   const [busy, setBusy] = useState(false);
   const [activeSegment, setActiveSegment] = useState<{ id: string; name: string } | null>(null);
   const [duplicates, setDuplicates] = useState<DuplicateContactGroupDTO[] | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
   const [reloadKey, setReloadKey] = useState(0);
 
   const requestId = useRef(0);
@@ -234,17 +235,18 @@ export function ContactsView({
         {loadError && (
           <p style={{ color: "var(--red)", fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{loadError}</p>
         )}
+        {selected.length > 0 && <div className="legend-row" style={{ marginBottom: 10, gap: 8 }}><strong>{selected.length} selecionado(s)</strong><button className="btn small" onClick={() => { const tag = prompt("Tag para adicionar:"); if (tag?.trim()) run(() => bulkUpdateContacts(selected, { addTags: [tag.trim()] })).then(() => setSelected([])); }}>Adicionar tag</button><select defaultValue="" onChange={(e) => { if (e.target.value) run(() => bulkUpdateContacts(selected, { ownerId: e.target.value === "__none" ? null : e.target.value })).then(() => setSelected([])); }}><option value="">Atribuir responsável</option><option value="__none">Sem responsável</option>{team.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}</select><button className="btn small danger" onClick={() => { if (confirm("Mover os contatos selecionados para a lixeira?")) run(() => bulkUpdateContacts(selected, { delete: true })).then(() => setSelected([])); }}>Excluir</button><button className="btn small" onClick={() => setSelected([])}>Limpar</button></div>}
 
         <div className="table-wrap" style={{ opacity: loading ? 0.6 : 1, transition: "opacity .15s" }}>
           <table>
             <thead>
               <tr>
-                <th>Nome</th><th>Empresa</th><th>E-mail</th><th>Telefone</th><th>Tags</th><th>Responsável</th><th>Negócios</th>
+                <th><input type="checkbox" checked={rows.length > 0 && selected.length === rows.length} onChange={(e) => setSelected(e.target.checked ? rows.map((row) => row.id) : [])} /></th><th>Nome</th><th>Empresa</th><th>E-mail</th><th>Telefone</th><th>Tags</th><th>Responsável</th><th>Negócios</th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 ? (
-                <tr><td colSpan={7}><div className="empty-state"><Icon.empty /><div>{loading ? "Buscando…" : "Nenhum contato encontrado"}</div></div></td></tr>
+                <tr><td colSpan={8}><div className="empty-state"><Icon.empty /><div>{loading ? "Buscando…" : "Nenhum contato encontrado"}</div></div></td></tr>
               ) : (
                 rows.map((c) => {
                   const owner = team.find((m) => m.id === c.ownerId);
@@ -254,6 +256,7 @@ export function ContactsView({
                       className="row"
                       onClick={() => openDetail(c.id)}
                     >
+                      <td><input type="checkbox" checked={selected.includes(c.id)} onClick={(e) => e.stopPropagation()} onChange={(e) => setSelected((current) => e.target.checked ? [...current, c.id] : current.filter((id) => id !== c.id))} /></td>
                       <td>
                         <div className="name-cell">
                           <span className="avatar md" style={{ background: colorFor(c.name) }}>{initials(c.name)}</span>

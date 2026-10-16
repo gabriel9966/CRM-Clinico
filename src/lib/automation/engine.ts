@@ -218,11 +218,21 @@ async function executeFrom(flow: Flow, runId: string, startNodeId: string, ctx: 
 export async function triggerAutomations(
   organizationId: string,
   trigger: string,
-  ctx: { contactId?: string | null; opportunityId?: string | null; payload?: unknown; pipelineId?: string; stageId?: string; tag?: string }
+  ctx: {
+    contactId?: string | null;
+    opportunityId?: string | null;
+    payload?: unknown;
+    pipelineId?: string;
+    stageId?: string;
+    tag?: string;
+    /** Uso interno do agendador: evita que uma regra dispare as demais. */
+    onlyAutomationId?: string;
+  }
 ) {
   const automations = await prisma.automation.findMany({ where: { organizationId, trigger: trigger as never, enabled: true } });
 
   for (const automation of automations) {
+    if (ctx.onlyAutomationId && automation.id !== ctx.onlyAutomationId) continue;
     let config: Record<string, unknown> = {};
     try {
       config = JSON.parse(automation.triggerConfig);
@@ -252,12 +262,18 @@ export async function triggerAutomations(
       },
     });
 
-    await executeFrom(flow, run.id, firstEdge.target, {
-      organizationId,
-      contactId: ctx.contactId,
-      opportunityId: ctx.opportunityId,
-      payload: ctx.payload,
-    });
+    try {
+      await executeFrom(flow, run.id, firstEdge.target, {
+        organizationId,
+        contactId: ctx.contactId,
+        opportunityId: ctx.opportunityId,
+        payload: ctx.payload,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "erro desconhecido";
+      await appendLog(run.id, { label: "Falha da execução", result: { ok: false, reason } });
+      await prisma.automationRun.update({ where: { id: run.id }, data: { status: "FAILED", finishedAt: new Date() } });
+    }
   }
 }
 
@@ -343,5 +359,63 @@ export async function processDueSchedulesFallback() {
   const due = await prisma.automationSchedule.findMany({ where: { runAt: { lte: new Date() } } });
   for (const schedule of due) {
     await resumeAutomationRun(schedule.automationRunId);
+  }
+}
+
+/**
+ * Gatilhos avaliados periodicamente. Esta primeira versão é deliberadamente
+ * simples e auditável: "inatividade" usa a última mensagem do contato e
+ * "data" usa uma data/hora fixa configurada na automação.
+ */
+export async function processDueTriggerAutomations() {
+  const now = new Date();
+  const automations = await prisma.automation.findMany({
+    where: {
+      enabled: true,
+      trigger: { in: ["CONTACT_INACTIVE", "DATE_REACHED"] },
+    },
+  });
+
+  for (const automation of automations) {
+    let config: Record<string, unknown> = {};
+    try {
+      config = JSON.parse(automation.triggerConfig);
+    } catch {
+      // Configuração vazia mantém os valores-padrão seguros abaixo.
+    }
+
+    if (automation.trigger === "DATE_REACHED") {
+      const dateAt = typeof config.dateAt === "string" ? new Date(config.dateAt) : null;
+      if (!dateAt || Number.isNaN(dateAt.getTime()) || dateAt > now || automation.lastTriggeredAt) continue;
+      await triggerAutomations(automation.organizationId, "DATE_REACHED", { onlyAutomationId: automation.id });
+      await prisma.automation.update({ where: { id: automation.id }, data: { lastTriggeredAt: now } });
+      continue;
+    }
+
+    const inactivityDays = Math.max(1, Math.min(3650, Number(config.inactivityDays ?? 3) || 3));
+    const repeatHours = Math.max(1, Math.min(24 * 30, Number(config.repeatHours ?? 24) || 24));
+    if (automation.lastTriggeredAt && now.getTime() - automation.lastTriggeredAt.getTime() < repeatHours * 3_600_000) continue;
+
+    const cutoff = new Date(now.getTime() - inactivityDays * 86_400_000);
+    const contacts = await prisma.contact.findMany({
+      where: {
+        organizationId: automation.organizationId,
+        deletedAt: null,
+        OR: [
+          { lastMessageAt: { lte: cutoff } },
+          { lastMessageAt: null, createdAt: { lte: cutoff } },
+        ],
+      },
+      select: { id: true },
+      take: 500,
+    });
+
+    for (const contact of contacts) {
+      await triggerAutomations(automation.organizationId, "CONTACT_INACTIVE", {
+        contactId: contact.id,
+        onlyAutomationId: automation.id,
+      });
+    }
+    await prisma.automation.update({ where: { id: automation.id }, data: { lastTriggeredAt: now } });
   }
 }

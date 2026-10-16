@@ -5,6 +5,7 @@ import { assignNextOwner } from "@/lib/assignment";
 import { guardWebhook } from "@/lib/webhook-auth";
 import { ensureLiveContact } from "@/lib/inbound";
 import { createMessage } from "@/lib/messages";
+import { logWebhook } from "@/lib/webhook-log";
 
 // Recebe e-mails inbound da conexão de e-mail do usuário (configurada em
 // /connections) e grava como Message + Contact no CRM, igual ao webhook da
@@ -90,6 +91,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ con
   });
 
   await triggerAutomations(organizationId, "MESSAGE_RECEIVED", { contactId });
+  await logWebhook({ organizationId, connectionId, source: "email", event: "inbound", statusCode: 200, payload: body });
 
   return NextResponse.json({ ok: true });
 }

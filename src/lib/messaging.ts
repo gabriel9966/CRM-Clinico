@@ -5,6 +5,8 @@ import { createMessage } from "./messages";
 import * as evolution from "./providers/evolution";
 import * as instagram from "./providers/instagram";
 import * as email from "./providers/email";
+import * as azap from "./providers/azap";
+import * as whatsappCloud from "./providers/whatsapp-cloud";
 import type { SendOptionDTO } from "./types";
 
 // Toda conversa acontece por um CANAL real (WhatsApp, Instagram ou e-mail),
@@ -92,8 +94,8 @@ async function loadOptions(organizationId: string, contactId: string) {
   const wa = contact.phone ? whatsappNumber(contact.phone) : null;
   for (const c of connections) {
     if (have.has(c.id)) continue;
-    if (c.provider === "WHATSAPP_EVOLUTION" && wa) {
-      options.push({ connectionId: c.id, provider: "WHATSAPP_EVOLUTION", label: c.label, connected: c.status === "CONNECTED", channelId: null, externalId: `${wa}@s.whatsapp.net` });
+    if ((c.provider === "WHATSAPP_EVOLUTION" || c.provider === "WHATSAPP_AZAP" || c.provider === "WHATSAPP_CLOUD") && wa) {
+      options.push({ connectionId: c.id, provider: c.provider as Opt["provider"], label: c.label, connected: c.status === "CONNECTED", channelId: null, externalId: c.provider === "WHATSAPP_EVOLUTION" ? `${wa}@s.whatsapp.net` : wa });
     } else if (c.provider === "EMAIL" && contact.email) {
       options.push({ connectionId: c.id, provider: "EMAIL", label: c.label, connected: c.status === "CONNECTED", channelId: null, externalId: contact.email.trim().toLowerCase() });
     }
@@ -118,6 +120,10 @@ async function deliver(connectionId: string, provider: Opt["provider"], destinat
   const conn = await prisma.connection.findUniqueOrThrow({ where: { id: connectionId } });
   if (provider === "WHATSAPP_EVOLUTION") {
     await evolution.sendText(decryptJson<evolution.EvolutionConfig>(conn.config), destination, text);
+  } else if (provider === "WHATSAPP_AZAP") {
+    await azap.sendText(decryptJson<azap.AzapConfig>(conn.config), destination, text);
+  } else if (provider === "WHATSAPP_CLOUD") {
+    await whatsappCloud.sendText(decryptJson<whatsappCloud.WhatsAppCloudConfig>(conn.config), destination, text);
   } else if (provider === "INSTAGRAM") {
     await instagram.sendText(decryptJson<instagram.InstagramConfig>(conn.config), destination, text);
   } else {
@@ -134,7 +140,7 @@ export async function sendContactMessage(
   organizationId: string,
   contactId: string,
   rawText: string,
-  opts: { connectionId?: string; senderId?: string } = {}
+  opts: { connectionId?: string; senderId?: string; conversationId?: string } = {}
 ): Promise<SendResult> {
   const text = rawText.trim();
   if (!text) return fail("texto_vazio");
@@ -190,6 +196,7 @@ export async function sendContactMessage(
     direction: "out",
     senderId: opts.senderId ?? null,
     connectionId: chosen.connectionId,
+    conversationId: opts.conversationId ?? null,
     status,
   });
   return { ok: true, status, messageId: message.id, connectionId: chosen.connectionId, ...(error ? { error } : {}) };

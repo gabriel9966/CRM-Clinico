@@ -16,6 +16,7 @@ export async function createTeamMember(
   const email = String(formData.get("email") || "").trim().toLowerCase();
   const password = String(formData.get("password") || "");
   const color = String(formData.get("color") || "#4f46e5");
+  const team = String(formData.get("team") || "Geral").trim().slice(0, 60) || "Geral";
 
   if (!name || !email || !password) {
     return { error: "Preencha nome, e-mail e senha." };
@@ -30,17 +31,17 @@ export async function createTeamMember(
   }
 
   const passwordHash = await bcrypt.hash(password, 10);
-  await prisma.user.create({ data: { name, email, passwordHash, color, organizationId } });
+  await prisma.user.create({ data: { name, email, passwordHash, color, team, organizationId } });
   revalidatePath("/team");
   return {};
 }
 
 export async function updateTeamMember(
   id: string,
-  data: { name: string; color: string }
+  data: { name: string; color: string; team: string }
 ) {
   const { organizationId } = await requireAdminUser();
-  await prisma.user.updateMany({ where: { id, organizationId }, data: { name: data.name, color: data.color } });
+  await prisma.user.updateMany({ where: { id, organizationId }, data: { name: data.name, color: data.color, team: data.team.trim().slice(0, 60) || "Geral" } });
   revalidatePath("/team");
 }
 

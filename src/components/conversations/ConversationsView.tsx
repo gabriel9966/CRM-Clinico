@@ -9,6 +9,8 @@ import type {
   ActivityDTO,
   ConversationChannelInfo,
   ConversationRowDTO,
+  ConversationEventDTO,
+  ConnectionDTO,
   MessageDTO,
   MessageTemplateDTO,
   OpportunityDTO,
@@ -17,15 +19,16 @@ import type {
   SendOptionDTO,
   TeamMemberDTO,
 } from "@/lib/types";
-import { sendMessage, fetchSendOptions } from "@/app/conversations/actions";
-import { fetchContactDetail, fetchConversations, fetchThread } from "@/app/listings/actions";
-import { reassignContactOwner } from "@/app/contacts/actions";
+import { assignConversation, fetchConversationEvents, fetchConversationSendOptions, sendMessage, setConversationStatus, updateConversationTags } from "@/app/conversations/actions";
+import { fetchContactDetail, fetchConversationThread, fetchConversations } from "@/app/listings/actions";
 import { createMessageTemplate, deleteMessageTemplate } from "@/app/templates/actions";
 import { createActivity, type ActivityInput } from "@/app/activities/actions";
 import { createOpportunity } from "@/app/pipeline/actions";
 
 const PROVIDER_LABEL: Record<NonNullable<ConversationChannelInfo>["provider"], string> = {
   WHATSAPP_EVOLUTION: "WhatsApp",
+  WHATSAPP_AZAP: "WhatsApp · AZAP",
+  WHATSAPP_CLOUD: "WhatsApp · Oficial",
   INSTAGRAM: "Instagram",
   EMAIL: "E-mail",
 };
@@ -69,37 +72,42 @@ function mergeMessages(current: MessageDTO[], incoming: MessageDTO[]): MessageDT
 
 export function ConversationsView({
   initialPage,
-  initialChannels,
   initialThread,
   initialSendOptions,
   team,
   currentUserRole,
+  currentUserId,
   templates,
   pipelines,
+  connections,
+  tags,
 }: {
   initialPage: Page<ConversationRowDTO>;
-  initialChannels: Record<string, ConversationChannelInfo>;
   /** Mensagens da primeira conversa, já carregadas pelo servidor. */
   initialThread: Page<MessageDTO> | null;
   /** Canais de envio da primeira conversa. */
   initialSendOptions: SendOptionDTO[];
   team: TeamMemberDTO[];
   currentUserRole: "ADMIN" | "MEMBER";
+  currentUserId: string;
   templates: MessageTemplateDTO[];
   pipelines: PipelineDTO[];
+  connections: ConnectionDTO[];
+  tags: string[];
 }) {
   const router = useRouter();
 
   // Lista de conversas (paginada) e canais só dos contatos carregados.
   const [rows, setRows] = useState<ConversationRowDTO[]>(initialPage.items);
   const [nextCursor, setNextCursor] = useState<string | null>(initialPage.nextCursor);
-  const [channels, setChannels] = useState(initialChannels);
   const [search, setSearch] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [filters, setFilters] = useState({ ownerId: "", team: "", connectionId: "", provider: "", tag: "", stageId: "", status: "OPEN", from: "", to: "" });
   const [listLoading, setListLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
 
   // Conversa aberta: mensagens da mais recente para trás, sob demanda.
-  const [selectedId, setSelectedId] = useState<string | null>(initialPage.items[0]?.contact.id ?? null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialPage.items[0]?.id ?? null);
   const [selectedContact, setSelectedContact] = useState<ContactDTO | null>(initialPage.items[0]?.contact ?? null);
   const [messages, setMessages] = useState<MessageDTO[]>(initialThread?.items ?? []);
   const [olderCursor, setOlderCursor] = useState<string | null>(initialThread?.nextCursor ?? null);
@@ -117,27 +125,39 @@ export function ConversationsView({
   const [customerPanelOpen, setCustomerPanelOpen] = useState(false);
   const [customerDetail, setCustomerDetail] = useState<CustomerDetail | null>(null);
   const [customerDetailLoading, setCustomerDetailLoading] = useState(false);
+  const [events, setEvents] = useState<ConversationEventDTO[]>([]);
+  const [tagDraft, setTagDraft] = useState("");
   const [quickAction, setQuickAction] = useState<"task" | "opportunity" | null>(null);
   const [quickActionBusy, setQuickActionBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const listSeq = useRef(0);
   const threadSeq = useRef(0);
-  const selectedIdRef = useRef<string | null>(initialPage.items[0]?.contact.id ?? null);
+  const selectedIdRef = useRef<string | null>(initialPage.items[0]?.id ?? null);
   const pagesLoaded = useRef(1);
   const skipFirstListLoad = useRef(true);
 
-  function ownerOf(contact: ContactDTO) {
-    return contact.ownerId ? team.find((m) => m.id === contact.ownerId) : undefined;
+  function ownerOf(ownerId: string | null) {
+    return ownerId ? team.find((m) => m.id === ownerId) : undefined;
   }
 
   // A conversa aberta continua na tela mesmo que a busca da lista deixe de
   // listá-la: guardamos o contato escolhido além das linhas carregadas.
-  const activeRow = rows.find((r) => r.contact.id === selectedId) ?? null;
-  const activeContact = activeRow?.contact ?? (selectedContact?.id === selectedId ? selectedContact : null);
-  const activeChannel = activeContact ? channels[activeContact.id] ?? null : null;
-  const activeOwner = activeContact ? ownerOf(activeContact) : undefined;
+  const activeRow = rows.find((r) => r.id === selectedId) ?? null;
+  const activeContact = activeRow?.contact ?? selectedContact;
+  const activeChannel = activeRow?.channel ?? null;
+  const activeOwner = ownerOf(activeRow?.ownerId ?? null);
   const defaultPipeline = pipelines[0];
+  const linkedChannels = sendOptions.filter((option) => option.existing);
+  const filtersApplied = Object.entries(filters).filter(([key, value]) => value && !(key === "status" && value === "OPEN")).length;
+
+  async function changeAssignee(ownerId: string | null, mode: "assign" | "transfer" | "claim" = "assign") {
+    if (!activeRow) return;
+    const result = await assignConversation(activeRow.id, ownerId, mode);
+    if (!result.ok) return;
+    setRows((prev) => prev.map((row) => (row.id === activeRow.id ? { ...row, ownerId } : row)));
+    router.refresh();
+  }
 
   // ── Lista: busca (no servidor) e "carregar mais" ──────────────────────────
   const reloadList = useCallback(
@@ -145,17 +165,16 @@ export function ConversationsView({
       const mine = ++listSeq.current;
       setListLoading(true);
       try {
-        const { page, channels: ch } = await fetchConversations({ q: q.trim() || undefined });
+        const { page } = await fetchConversations({ q: q.trim() || undefined, ...filters, provider: (filters.provider || undefined) as "WHATSAPP_EVOLUTION" | "INSTAGRAM" | "EMAIL" | undefined, status: filters.status as "OPEN" | "CLOSED" | "ALL" });
         if (mine !== listSeq.current) return;
         setRows(page.items);
         setNextCursor(page.nextCursor);
-        setChannels(ch);
         pagesLoaded.current = 1;
       } finally {
         if (mine === listSeq.current) setListLoading(false);
       }
     },
-    []
+    [filters]
   );
 
   useEffect(() => {
@@ -165,18 +184,17 @@ export function ConversationsView({
     }
     const timer = setTimeout(() => reloadList(search), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [search, reloadList]);
+  }, [search, filters, reloadList]);
 
   async function loadMoreConversations() {
     if (!nextCursor || loadingMore) return;
     setLoadingMore(true);
     const mine = listSeq.current;
     try {
-      const { page, channels: ch } = await fetchConversations({ q: search.trim() || undefined, cursor: nextCursor });
+      const { page } = await fetchConversations({ q: search.trim() || undefined, cursor: nextCursor, ...filters, provider: (filters.provider || undefined) as "WHATSAPP_EVOLUTION" | "INSTAGRAM" | "EMAIL" | undefined, status: filters.status as "OPEN" | "CLOSED" | "ALL" });
       if (mine !== listSeq.current) return;
       setRows((prev) => [...prev, ...page.items.filter((r) => !prev.some((p) => p.contact.id === r.contact.id))]);
       setNextCursor(page.nextCursor);
-      setChannels((prev) => ({ ...prev, ...ch }));
       pagesLoaded.current += 1;
     } finally {
       setLoadingMore(false);
@@ -184,11 +202,11 @@ export function ConversationsView({
   }
 
   // ── Conversa aberta: carrega as mensagens mais recentes ao trocar de contato ─
-  const loadThread = useCallback(async (contactId: string) => {
+  const loadThread = useCallback(async (conversationId: string) => {
     const mine = ++threadSeq.current;
     setThreadLoading(true);
     try {
-      const page = await fetchThread(contactId);
+      const page = await fetchConversationThread(conversationId);
       if (mine !== threadSeq.current) return;
       setMessages(page?.items ?? []);
       setOlderCursor(page?.nextCursor ?? null);
@@ -199,11 +217,11 @@ export function ConversationsView({
 
   // Trocar de conversa limpa a tela e busca as mensagens da nova (feito no
   // clique, não num efeito: assim não há renderização com a conversa errada).
-  function openConversation(c: ContactDTO) {
-    if (c.id === selectedId) return;
-    selectedIdRef.current = c.id;
-    setSelectedId(c.id);
-    setSelectedContact(c);
+  function openConversation(row: ConversationRowDTO) {
+    if (row.id === selectedId) return;
+    selectedIdRef.current = row.id;
+    setSelectedId(row.id);
+    setSelectedContact(row.contact);
     setMessages([]);
     setOlderCursor(null);
     setSendOptions([]);
@@ -211,9 +229,9 @@ export function ConversationsView({
     setSendError(null);
     setCustomerPanelOpen(false);
     setCustomerDetail(null);
-    loadThread(c.id);
-    fetchSendOptions(c.id).then((opts) => {
-      if (selectedIdRef.current === c.id) setSendOptions(opts); // ignora se já trocou de conversa
+    loadThread(row.id);
+    fetchConversationSendOptions(row.id).then((opts) => {
+      if (selectedIdRef.current === row.id) setSendOptions(opts); // ignora se já trocou de conversa
     });
   }
 
@@ -223,7 +241,7 @@ export function ConversationsView({
     const el = bodyRef.current;
     const prevHeight = el?.scrollHeight ?? 0;
     try {
-      const page = await fetchThread(selectedId, olderCursor);
+      const page = await fetchConversationThread(selectedId, olderCursor);
       if (!page) return;
       setMessages((prev) => mergeMessages(prev, page.items));
       setOlderCursor(page.nextCursor);
@@ -249,14 +267,13 @@ export function ConversationsView({
       if (document.visibilityState !== "visible") return;
       try {
         // Lista: só se o usuário não está buscando nem paginou (senão apagaria o que ele carregou).
-        if (!search.trim() && pagesLoaded.current === 1) {
-          const { page, channels: ch } = await fetchConversations();
+        if (!search.trim() && pagesLoaded.current === 1 && filtersApplied === 0) {
+          const { page } = await fetchConversations();
           setRows(page.items);
           setNextCursor(page.nextCursor);
-          setChannels((prev) => ({ ...prev, ...ch }));
         }
         if (selectedId) {
-          const page = await fetchThread(selectedId);
+          const page = await fetchConversationThread(selectedId);
           if (page) setMessages((prev) => mergeMessages(prev, page.items));
         }
       } catch {
@@ -265,17 +282,16 @@ export function ConversationsView({
     };
     const id = setInterval(tick, POLL_MS);
     return () => clearInterval(id);
-  }, [search, selectedId]);
+  }, [search, selectedId, filtersApplied]);
 
   async function refreshNow() {
-    if (!search.trim() && pagesLoaded.current === 1) {
-      const { page, channels: ch } = await fetchConversations();
+    if (!search.trim() && pagesLoaded.current === 1 && filtersApplied === 0) {
+      const { page } = await fetchConversations();
       setRows(page.items);
       setNextCursor(page.nextCursor);
-      setChannels((prev) => ({ ...prev, ...ch }));
     }
     if (selectedId) {
-      const page = await fetchThread(selectedId);
+      const page = await fetchConversationThread(selectedId);
       if (page) setMessages((prev) => mergeMessages(prev, page.items));
     }
   }
@@ -286,8 +302,10 @@ export function ConversationsView({
     setCustomerDetail(null);
     setCustomerDetailLoading(true);
     try {
-      const detail = await fetchContactDetail(activeContact.id);
+      const [detail, history] = await Promise.all([fetchContactDetail(activeContact.id), selectedId ? fetchConversationEvents(selectedId) : Promise.resolve([])]);
       setCustomerDetail(detail);
+      setEvents(history);
+      setTagDraft(detail?.contact.tags.join(", ") ?? "");
     } finally {
       setCustomerDetailLoading(false);
     }
@@ -301,8 +319,9 @@ export function ConversationsView({
     setSending(true);
     setSendError(null);
     try {
-      const contactId = activeContact.id;
-      const result = await sendMessage(contactId, text, chosenConnection || undefined);
+      const conversationId = selectedId;
+      if (!conversationId) return;
+      const result = await sendMessage(conversationId, text);
       if (!result.ok) {
         // Nada foi enviado nem gravado: o texto continua no campo para tentar de novo.
         setSendError(result.error);
@@ -314,7 +333,7 @@ export function ConversationsView({
       }
       await refreshNow();
       // O envio pode ter criado o vínculo com o canal (primeira conversa).
-      setSendOptions(await fetchSendOptions(contactId));
+      setSendOptions(await fetchConversationSendOptions(conversationId));
     } finally {
       setSending(false);
     }
@@ -325,6 +344,8 @@ export function ConversationsView({
   const usableChannels = sendOptions.filter((o) => o.connected);
   const PROVIDER_NAME: Record<SendOptionDTO["provider"], string> = {
     WHATSAPP_EVOLUTION: "WhatsApp",
+    WHATSAPP_AZAP: "WhatsApp · AZAP",
+    WHATSAPP_CLOUD: "WhatsApp · Oficial",
     INSTAGRAM: "Instagram",
     EMAIL: "E-mail",
   };
@@ -356,6 +377,25 @@ export function ConversationsView({
                 onChange={(e) => setSearch(e.target.value)}
               />
             </div>
+            <div className="conversation-filter-trigger">
+              <button type="button" className={`btn small ${filtersApplied ? "primary" : ""}`} onClick={() => setFiltersOpen((open) => !open)}>
+                Filtros{filtersApplied ? ` (${filtersApplied})` : ""}
+              </button>
+              {filtersApplied > 0 && <button type="button" className="btn small ghost" onClick={() => setFilters({ ownerId: "", team: "", connectionId: "", provider: "", tag: "", stageId: "", status: "OPEN", from: "", to: "" })}>Limpar</button>}
+            </div>
+            {filtersOpen && (
+              <div className="conversation-filters">
+                <label>Atendente<select value={filters.ownerId} onChange={(e) => setFilters((f) => ({ ...f, ownerId: e.target.value }))}><option value="">Todos</option><option value="unassigned">Sem atendente</option>{team.filter((member) => member.isActive).map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}</select></label>
+                <label>Equipe<select value={filters.team} onChange={(e) => setFilters((f) => ({ ...f, team: e.target.value }))}><option value="">Todas</option>{[...new Set(team.map((member) => member.team))].sort().map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
+                <label>Canal<select value={filters.provider} onChange={(e) => setFilters((f) => ({ ...f, provider: e.target.value, connectionId: "" }))}><option value="">Todos</option><option value="WHATSAPP_EVOLUTION">WhatsApp</option><option value="INSTAGRAM">Instagram</option><option value="EMAIL">E-mail</option></select></label>
+                <label>Instância<select value={filters.connectionId} onChange={(e) => setFilters((f) => ({ ...f, connectionId: e.target.value }))}><option value="">Todas</option>{connections.filter((connection) => !filters.provider || connection.provider === filters.provider).map((connection) => <option key={connection.id} value={connection.id}>{PROVIDER_NAME[connection.provider]} · {connection.label}</option>)}</select></label>
+                <label>Tag<select value={filters.tag} onChange={(e) => setFilters((f) => ({ ...f, tag: e.target.value }))}><option value="">Todas</option>{tags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select></label>
+                <label>Etapa<select value={filters.stageId} onChange={(e) => setFilters((f) => ({ ...f, stageId: e.target.value }))}><option value="">Todas</option>{pipelines.flatMap((pipeline) => pipeline.stages.map((stage) => <option key={stage.id} value={stage.id}>{pipeline.name} · {stage.label}</option>))}</select></label>
+                <label>Status<select value={filters.status} onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value }))}><option value="OPEN">Abertas</option><option value="CLOSED">Finalizadas</option><option value="ALL">Todas</option></select></label>
+                <label>De<input type="date" value={filters.from} onChange={(e) => setFilters((f) => ({ ...f, from: e.target.value }))} /></label>
+                <label>Até<input type="date" value={filters.to} onChange={(e) => setFilters((f) => ({ ...f, to: e.target.value }))} /></label>
+              </div>
+            )}
             {rows.length === 0 ? (
               <div className="thread-empty" style={{ padding: 24 }}>
                 <Icon.chat />
@@ -369,14 +409,15 @@ export function ConversationsView({
               </div>
             ) : (
               <>
-                {rows.map(({ contact: c, lastText, lastTime }) => {
-                  const owner = ownerOf(c);
-                  const channel = channels[c.id] ?? null;
+                {rows.map((row) => {
+                  const { contact: c, lastText, lastTime } = row;
+                  const owner = ownerOf(row.ownerId);
+                  const channel = row.channel;
                   return (
                     <div
-                      key={c.id}
-                      className={`convo-item ${selectedId === c.id ? "active" : ""}`}
-                      onClick={() => openConversation(c)}
+                      key={row.id}
+                      className={`convo-item ${selectedId === row.id ? "active" : ""}`}
+                      onClick={() => openConversation(row)}
                     >
                       <span className="avatar md" style={{ background: colorFor(c.name) }}>{initials(c.name)}</span>
                       <div className="meta">
@@ -387,8 +428,9 @@ export function ConversationsView({
                         <div className="preview">{lastText ?? "Sem mensagens ainda"}</div>
                         <div style={{ display: "flex", gap: 6, marginTop: 4, alignItems: "center" }}>
                           <ChannelBadge channel={channel} />
-                          {currentUserRole === "ADMIN" && owner && (
-                            <span className="muted" style={{ fontSize: 11 }}>· {owner.name}</span>
+                          <span className={`conversation-status ${row.status === "CLOSED" ? "closed" : ""}`}>{row.status === "OPEN" ? "Aberta" : "Finalizada"}</span>
+                          {currentUserRole === "ADMIN" && (
+                            <span className="convo-owner">· {owner?.name ?? "Sem atendente"}</span>
                           )}
                         </div>
                       </div>
@@ -418,30 +460,36 @@ export function ConversationsView({
                     <div className="hname">{activeContact.name}</div>
                     <div className="hsub">{activeContact.company || activeContact.email}</div>
                   </div>
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-                    <ChannelBadge channel={activeChannel} />
+                  <div className="conversation-head-meta">
+                    <div className="conversation-channel-summary">
+                      <span>CANAL DA CONVERSA</span>
+                      <ChannelBadge channel={activeChannel} />
+                      <small>{activeChannel ? `Instância/conexão: ${activeChannel.label}` : "Sem vínculo: não é possível identificar a instância."}</small>
+                    </div>
                     {currentUserRole === "ADMIN" ? (
-                      <select
-                        value={activeContact.ownerId ?? ""}
-                        onChange={async (e) => {
-                          const ownerId = e.target.value || null;
-                          await reassignContactOwner(activeContact.id, ownerId);
-                          setRows((prev) =>
-                            prev.map((r) => (r.contact.id === activeContact.id ? { ...r, contact: { ...r.contact, ownerId } } : r))
-                          );
-                          setSelectedContact((prev) => (prev ? { ...prev, ownerId } : prev));
-                          router.refresh();
-                        }}
-                        style={{ fontSize: 11, padding: "2px 4px" }}
-                      >
-                        <option value="">Sem responsável</option>
-                        {team.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                      </select>
+                      <label className="conversation-assignment">
+                        <span>ATENDENTE</span>
+                        <div>
+                          <span className="avatar" style={{ background: activeOwner?.color ?? "#94a3b8" }}>{activeOwner ? initials(activeOwner.name) : "?"}</span>
+                          <select value={activeRow?.ownerId ?? ""} onChange={(event) => changeAssignee(event.target.value || null, activeRow?.ownerId ? "transfer" : "assign")} aria-label="Definir atendente da conversa">
+                            <option value="">Sem atendente</option>
+                            {team.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
+                          </select>
+                        </div>
+                      </label>
                     ) : (
-                      activeOwner && <span className="muted" style={{ fontSize: 11 }}>Atende: {activeOwner.name}</span>
+                      <div className="conversation-assignment readonly"><span>ATENDENTE</span><div><span className="avatar" style={{ background: activeOwner?.color ?? "#94a3b8" }}>{activeOwner ? initials(activeOwner.name) : "?"}</span><strong>{activeOwner?.name ?? "Sem atendente"}</strong></div></div>
                     )}
                   </div>
-                  <button type="button" className="btn small" onClick={openCustomerPanel}>Ficha</button>
+                  <div className="conversation-actions">
+                    {activeRow?.status === "OPEN" ? (
+                      <button type="button" className="btn small" onClick={() => activeRow && setConversationStatus(activeRow.id, "CLOSED").then(() => { setRows((prev) => prev.map((row) => row.id === activeRow.id ? { ...row, status: "CLOSED" } : row)); router.refresh(); })}>Finalizar</button>
+                    ) : (
+                      <button type="button" className="btn small primary" onClick={() => activeRow && setConversationStatus(activeRow.id, "OPEN").then(() => { setRows((prev) => prev.map((row) => row.id === activeRow.id ? { ...row, status: "OPEN" } : row)); router.refresh(); })}>Reabrir</button>
+                    )}
+                    {activeRow?.ownerId !== currentUserId && <button type="button" className="btn small" onClick={() => changeAssignee(null, "claim")}>Assumir</button>}
+                    <button type="button" className="btn small" onClick={openCustomerPanel}>Ficha</button>
+                  </div>
                 </div>
                 <div className="thread-body" ref={bodyRef}>
                   {olderCursor && (
@@ -472,12 +520,12 @@ export function ConversationsView({
                     ))
                   )}
                 </div>
-                {usableChannels.length === 0 ? (
+                {usableChannels.length === 0 || activeRow?.status === "CLOSED" ? (
                   <div
                     role="alert"
                     style={{ padding: "10px 16px", fontSize: 12, fontWeight: 600, color: "var(--orange)", background: "var(--orange-soft, #fff7ed)", borderTop: "1px solid var(--border-soft)" }}
                   >
-                    {noChannelReason}
+                    {activeRow?.status === "CLOSED" ? "Este atendimento foi finalizado. Reabra-o para enviar uma nova mensagem." : noChannelReason}
                   </div>
                 ) : (
                   <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 16px 0", fontSize: 12 }}>
@@ -520,9 +568,9 @@ export function ConversationsView({
                     ref={inputRef}
                     placeholder={usableChannels.length === 0 ? "Sem canal para enviar" : "Escreva uma mensagem..."}
                     autoComplete="off"
-                    disabled={usableChannels.length === 0}
+                    disabled={usableChannels.length === 0 || activeRow?.status === "CLOSED"}
                   />
-                  <button type="submit" className="btn primary icon-only" disabled={sending || usableChannels.length === 0}><Icon.send /></button>
+                  <button type="submit" className="btn primary icon-only" disabled={sending || usableChannels.length === 0 || activeRow?.status === "CLOSED"}><Icon.send /></button>
 
                   {templatesOpen && (
                     <div className="modal" style={{ position: "absolute", bottom: "100%", left: 0, width: 320, maxHeight: 260, overflowY: "auto", marginBottom: 8, zIndex: 10 }}>
@@ -582,11 +630,31 @@ export function ConversationsView({
                   <div className="context-contact-lines">
                     <a href={customerDetail.contact.email ? `mailto:${customerDetail.contact.email}` : undefined}>{customerDetail.contact.email || "Sem e-mail"}</a>
                     <a href={customerDetail.contact.phone ? `tel:${customerDetail.contact.phone}` : undefined}>{customerDetail.contact.phone || "Sem telefone"}</a>
-                    <span>Responsável: {ownerOf(customerDetail.contact)?.name ?? "Não definido"}</span>
+                    <span>Responsável: {activeOwner?.name ?? "Não definido"}</span>
                   </div>
+                  <section className="context-section">
+                    <div className="context-section-title">Canal e instância</div>
+                    {linkedChannels.length > 0 ? linkedChannels.map((channel) => (
+                      <div key={channel.connectionId} className="context-channel">
+                        <strong>{PROVIDER_NAME[channel.provider]}</strong>
+                        <span>{channel.label} · {channel.connected ? "conectado" : "desconectado"}</span>
+                      </div>
+                    )) : activeChannel ? (
+                      <div className="context-channel"><strong>{PROVIDER_LABEL[activeChannel.provider]}</strong><span>{activeChannel.label}</span></div>
+                    ) : <span className="muted">Nenhum canal vinculado. Esta conversa foi criada sem registrar WhatsApp, Instagram ou e-mail.</span>}
+                  </section>
                   <div className="context-tags">
                     {customerDetail.contact.tags.length ? customerDetail.contact.tags.map((tag) => <span key={tag} className="tag">{tag}</span>) : <span className="muted">Sem tags</span>}
                   </div>
+                  <form className="conversation-tag-editor" onSubmit={async (event) => {
+                    event.preventDefault();
+                    if (!selectedId) return;
+                    const result = await updateConversationTags(selectedId, tagDraft.split(","));
+                    if (result.ok) {
+                      setCustomerDetail((detail) => detail ? { ...detail, contact: { ...detail.contact, tags: result.tags ?? [] } } : detail);
+                      setEvents(await fetchConversationEvents(selectedId));
+                    }
+                  }}><input value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} placeholder="Tags separadas por vírgula" /><button className="btn small" type="submit">Salvar tags</button></form>
                   <div className="context-stat-grid">
                     <div><span>Oportunidades</span><strong>{customerDetail.opportunities.length}</strong></div>
                     <div><span>Em negociação</span><strong>{fmtMoney(customerDetail.opportunities.reduce((sum, opportunity) => sum + opportunity.value, 0))}</strong></div>
@@ -616,6 +684,12 @@ export function ConversationsView({
                   <section className="context-section">
                     <div className="context-section-title">Notas</div>
                     <p>{customerDetail.contact.notes || "Nenhuma nota cadastrada."}</p>
+                  </section>
+                  <section className="context-section">
+                    <div className="context-section-title">Histórico do atendimento</div>
+                    {events.length === 0 ? <span className="muted">Nenhuma ação registrada ainda.</span> : events.map((event) => (
+                      <div key={event.id} className="conversation-event"><strong>{event.detail}</strong><span>{event.actorName || "Sistema"} · {fmtDate(event.createdAt)} {fmtTime(event.createdAt)}</span></div>
+                    ))}
                   </section>
                   <a className="btn primary" href={`/contacts?contact=${customerDetail.contact.id}`}>Abrir ficha completa</a>
                 </>

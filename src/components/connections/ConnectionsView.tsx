@@ -8,6 +8,8 @@ import {
   createWhatsAppConnection,
   createInstagramConnection,
   createEmailConnection,
+  createAzapConnection,
+  createWhatsAppCloudConnection,
   checkWhatsAppStatus,
   refreshWhatsAppQr,
   getConnectionWebhookUrl,
@@ -17,9 +19,12 @@ import {
   type CreateInstagramState,
   type CreateEmailState,
 } from "@/app/connections/actions";
+import { createInboundWebhook, deleteInboundWebhook, toggleInboundWebhook, type InboundWebhookInput } from "@/app/inbound-webhooks/actions";
 
 const PROVIDER_LABEL: Record<ConnectionDTO["provider"], string> = {
   WHATSAPP_EVOLUTION: "WhatsApp",
+  WHATSAPP_AZAP: "WhatsApp · AZAP",
+  WHATSAPP_CLOUD: "WhatsApp · Cloud API",
   INSTAGRAM: "Instagram",
   EMAIL: "E-mail",
 };
@@ -38,9 +43,12 @@ const STATUS_COLOR: Record<ConnectionDTO["status"], string> = {
   ERROR: "var(--red)",
 };
 
-export function ConnectionsView({ connections }: { connections: ConnectionDTO[] }) {
+type InboundItem = { id: string; name: string; enabled: boolean; mapping: string; createdAt: string };
+type WebhookItem = { id: string; source: string; event: string | null; statusCode: number; detail: string | null; createdAt: string; connectionId: string | null };
+
+export function ConnectionsView({ connections, inboundWebhooks, webhookLogs }: { connections: ConnectionDTO[]; inboundWebhooks: InboundItem[]; webhookLogs: WebhookItem[] }) {
   const router = useRouter();
-  const [modal, setModal] = useState<null | "choose" | "whatsapp" | "instagram" | "email">(null);
+  const [modal, setModal] = useState<null | "choose" | "whatsapp" | "azap" | "cloud" | "instagram" | "email" | "inbound">(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   async function handleDelete(id: string) {
@@ -69,11 +77,12 @@ export function ConnectionsView({ connections }: { connections: ConnectionDTO[] 
     try {
       const res = await getConnectionWebhookUrl(id);
       if (!res.url) return alert(res.error ?? "Não foi possível obter a URL.");
+      const url = res.url.startsWith("/") ? `${window.location.origin}${res.url}` : res.url;
       try {
-        await navigator.clipboard.writeText(res.url);
+        await navigator.clipboard.writeText(url);
         alert("URL do webhook copiada.");
       } catch {
-        prompt("Copie a URL do webhook:", res.url);
+        prompt("Copie a URL do webhook:", url);
       }
     } finally {
       setBusyId(null);
@@ -112,29 +121,17 @@ export function ConnectionsView({ connections }: { connections: ConnectionDTO[] 
             </button>
           </div>
         ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr><th>Canal</th><th>Nome</th><th>Status</th><th>Criada em</th><th></th></tr>
-              </thead>
-              <tbody>
-                {connections.map((c) => (
-                  <tr key={c.id} className="row">
-                    <td>{PROVIDER_LABEL[c.provider]}</td>
-                    <td style={{ fontWeight: 700 }}>{c.label}</td>
-                    <td>
-                      <span className="pill" style={{ background: STATUS_COLOR[c.status] + "22", color: STATUS_COLOR[c.status] }}>
-                        {STATUS_LABEL[c.status]}
-                      </span>
-                      {c.status === "ERROR" && c.lastError && (
-                        <div className="muted" style={{ fontSize: 11, marginTop: 3, maxWidth: 260 }}>{c.lastError}</div>
-                      )}
-                    </td>
-                    <td className="muted">{new Date(c.createdAt).toLocaleDateString("pt-BR")}</td>
-                    <td style={{ textAlign: "right" }}>
-                      {c.provider === "WHATSAPP_EVOLUTION" && c.status !== "CONNECTED" && (
+          <div className="connection-grid">
+            {connections.map((c) => (
+              <article key={c.id} className="connection-card">
+                <div className="connection-card-head"><div><span className="connection-provider">{PROVIDER_LABEL[c.provider]}</span><h3>{c.label}</h3></div>
+                  <span className="pill" style={{ background: STATUS_COLOR[c.status] + "22", color: STATUS_COLOR[c.status] }}>{STATUS_LABEL[c.status]}</span></div>
+                <div className="connection-card-meta">Instância/conexão ativa para atendimento multicanal · criada em {new Date(c.createdAt).toLocaleDateString("pt-BR")}</div>
+                {c.status === "ERROR" && c.lastError && <div className="connection-error">{c.lastError}</div>}
+                <div className="connection-card-actions">
+                      {["WHATSAPP_EVOLUTION", "WHATSAPP_AZAP", "WHATSAPP_CLOUD"].includes(c.provider) && (
                         <button className="btn small" disabled={busyId === c.id} onClick={() => handleCheckStatus(c.id)}>
-                          Checar status
+                          Verificar conexão
                         </button>
                       )}
                       {c.provider !== "INSTAGRAM" && (
@@ -157,11 +154,9 @@ export function ConnectionsView({ connections }: { connections: ConnectionDTO[] 
                       <button className="btn small danger" disabled={busyId === c.id} onClick={() => handleDelete(c.id)}>
                         <Icon.trash />
                       </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                </div>
+              </article>
+            ))}
           </div>
         )}
       </div>
@@ -177,6 +172,8 @@ export function ConnectionsView({ connections }: { connections: ConnectionDTO[] 
               <button className="btn" style={{ justifyContent: "flex-start", padding: 14 }} onClick={() => setModal("whatsapp")}>
                 <strong>WhatsApp</strong>&nbsp;<span className="muted">— via sua instância Evolution API</span>
               </button>
+              <button className="btn" style={{ justifyContent: "flex-start", padding: 14 }} onClick={() => setModal("azap")}><strong>WhatsApp via AZAP</strong>&nbsp;<span className="muted">— endpoint da sua conta AZAP</span></button>
+              <button className="btn" style={{ justifyContent: "flex-start", padding: 14 }} onClick={() => setModal("cloud")}><strong>WhatsApp Cloud API</strong>&nbsp;<span className="muted">— API oficial da Meta</span></button>
               <button className="btn" style={{ justifyContent: "flex-start", padding: 14 }} onClick={() => setModal("instagram")}>
                 <strong>Instagram</strong>&nbsp;<span className="muted">— via seu App da Meta</span>
               </button>
@@ -191,6 +188,15 @@ export function ConnectionsView({ connections }: { connections: ConnectionDTO[] 
       {modal === "whatsapp" && <WhatsAppModal onClose={() => setModal(null)} />}
       {modal === "instagram" && <InstagramModal onClose={() => setModal(null)} />}
       {modal === "email" && <EmailModal onClose={() => setModal(null)} />}
+      {modal === "azap" && <AzapModal onClose={() => setModal(null)} />}
+      {modal === "cloud" && <CloudModal onClose={() => setModal(null)} />}
+      {modal === "inbound" && <InboundModal onClose={() => setModal(null)} />}
+
+      <section className="connections-operations">
+        <div className="section-heading"><div><h2>Entradas por formulário e webhook</h2><p>Crie leads a partir de formulários, landing pages e outras ferramentas com mapeamento de campos.</p></div><button className="btn primary small" onClick={() => setModal("inbound")}>Criar entrada</button></div>
+        {inboundWebhooks.length === 0 ? <div className="muted">Nenhuma entrada configurada.</div> : <div className="inbound-list">{inboundWebhooks.map((item) => <div className="inbound-row" key={item.id}><div><strong>{item.name}</strong><span>{item.enabled ? "Ativa" : "Pausada"}</span></div><div><button className="btn small" onClick={() => toggleInboundWebhook(item.id, !item.enabled).then(() => router.refresh())}>{item.enabled ? "Pausar" : "Ativar"}</button><button className="btn small danger" onClick={() => deleteInboundWebhook(item.id).then(() => router.refresh())}><Icon.trash /></button></div></div>)}</div>}
+      </section>
+      <section className="connections-operations"><div className="section-heading"><div><h2>Logs de webhook</h2><p>Últimos eventos recebidos de suas instâncias e integrações.</p></div></div><div className="webhook-log-list">{webhookLogs.length === 0 ? <span className="muted">Nenhum evento recebido ainda.</span> : webhookLogs.map((log) => <div className="webhook-log" key={log.id}><span className={log.statusCode >= 400 ? "error" : "ok"}>{log.statusCode}</span><strong>{log.source}</strong><span>{log.event || "evento"}</span><small>{log.detail || "Processado"} · {new Date(log.createdAt).toLocaleString("pt-BR")}</small></div>)}</div></section>
     </>
   );
 }
@@ -436,4 +442,29 @@ function EmailModal({ onClose }: { onClose: () => void }) {
       </div>
     </div>
   );
+}
+
+function AzapModal({ onClose }: { onClose: () => void }) {
+  const router = useRouter();
+  const [state, formAction, pending] = useActionState(createAzapConnection, {});
+  const wasPending = useRef(false);
+  useEffect(() => { if (wasPending.current && !pending && !state.error) { router.refresh(); onClose(); } wasPending.current = pending; }, [pending, state, router, onClose]);
+  return <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={(event) => event.stopPropagation()}><div className="modal-head"><h2>Conectar AZAP</h2><button className="close-x" onClick={onClose}><Icon.close /></button></div><form action={formAction}><div className="modal-body"><p className="muted">Informe a URL de envio indicada pela documentação da sua conta AZAP. O CRM envia o número, texto e nome da instância no payload.</p><div className="field"><label>Nome da conexão *</label><input name="label" required placeholder="Ex: WhatsApp SDR" autoFocus /></div><div className="field"><label>URL HTTPS de envio *</label><input name="sendUrl" type="url" required placeholder="https://api.seuprovedor.com/..." /></div><div className="field"><label>Chave da API *</label><input name="apiKey" type="password" required /></div><div className="field"><label>Nome/ID da instância</label><input name="instanceName" placeholder="Opcional" /></div>{state.error && <p className="form-error">{state.error}</p>}</div><div className="modal-foot"><button type="button" className="btn" onClick={onClose}>Cancelar</button><button className="btn primary" disabled={pending}>{pending ? "Validando..." : "Conectar"}</button></div></form></div></div>;
+}
+
+function CloudModal({ onClose }: { onClose: () => void }) {
+  const router = useRouter();
+  const [state, formAction, pending] = useActionState(createWhatsAppCloudConnection, {});
+  const [url, setUrl] = useState("");
+  const wasPending = useRef(false);
+  useEffect(() => { setUrl(`${window.location.origin}/api/webhooks/whatsapp-cloud`); }, []);
+  useEffect(() => { if (wasPending.current && !pending && !state.error) { router.refresh(); onClose(); } wasPending.current = pending; }, [pending, state, router, onClose]);
+  return <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={(event) => event.stopPropagation()}><div className="modal-head"><h2>WhatsApp Cloud API oficial</h2><button className="close-x" onClick={onClose}><Icon.close /></button></div><form action={formAction}><div className="modal-body"><p className="muted">Use um token de sistema da Meta com permissão de mensagens. Cadastre a URL abaixo no webhook do App e assine o campo <code>messages</code>.</p><div className="field"><label>Nome da conexão *</label><input name="label" required placeholder="Ex: WhatsApp Oficial" autoFocus /></div><div className="field"><label>Access token *</label><input name="accessToken" type="password" required /></div><div className="field"><label>Phone Number ID *</label><input name="phoneNumberId" required /></div><div className="field-row"><div className="field"><label>Versão Graph API</label><input name="apiVersion" defaultValue="v23.0" /></div><div className="field"><label>Token de verificação *</label><input name="verifyToken" type="password" required /></div></div><div className="field"><label>URL de webhook</label><input readOnly value={url} onFocus={(event) => event.target.select()} /></div>{state.error && <p className="form-error">{state.error}</p>}</div><div className="modal-foot"><button type="button" className="btn" onClick={onClose}>Cancelar</button><button className="btn primary" disabled={pending}>{pending ? "Validando..." : "Conectar"}</button></div></form></div></div>;
+}
+
+function InboundModal({ onClose }: { onClose: () => void }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ url?: string; error?: string }>({});
+  return <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={(event) => event.stopPropagation()}><div className="modal-head"><h2>Entrada de formulário</h2><button className="close-x" onClick={onClose}><Icon.close /></button></div><form onSubmit={async (event) => { event.preventDefault(); setBusy(true); const data = new FormData(event.currentTarget); const response = await createInboundWebhook({ name: String(data.get("name") || ""), namePath: String(data.get("namePath") || ""), phonePath: String(data.get("phonePath") || ""), emailPath: String(data.get("emailPath") || ""), companyPath: String(data.get("companyPath") || ""), tagsPath: String(data.get("tagsPath") || "") } satisfies InboundWebhookInput); setResult(response); setBusy(false); if (response.id) router.refresh(); }}><div className="modal-body"><p className="muted">Informe caminhos do JSON, por exemplo <code>data.name</code> ou <code>contact.phone</code>. Campos vazios são ignorados.</p><div className="field"><label>Nome da entrada *</label><input name="name" required placeholder="Formulário do site" autoFocus /></div><div className="field-row"><div className="field"><label>Campo nome</label><input name="namePath" defaultValue="name" /></div><div className="field"><label>Campo telefone</label><input name="phonePath" defaultValue="phone" /></div></div><div className="field-row"><div className="field"><label>Campo e-mail</label><input name="emailPath" defaultValue="email" /></div><div className="field"><label>Campo empresa</label><input name="companyPath" defaultValue="company" /></div></div><div className="field"><label>Campo tags</label><input name="tagsPath" defaultValue="tags" /></div>{result.url && <div className="field"><label>URL gerada</label><input readOnly value={result.url} onFocus={(event) => event.target.select()} /></div>}{result.error && <p className="form-error">{result.error}</p>}</div><div className="modal-foot"><button type="button" className="btn" onClick={onClose}>Fechar</button><button className="btn primary" disabled={busy}>{busy ? "Criando..." : "Criar entrada"}</button></div></form></div></div>;
 }

@@ -64,12 +64,12 @@ export function CustomFieldsView({ fields }: { fields: CustomFieldDefinitionDTO[
           <div className="table-wrap" style={{ marginTop: 16 }}>
             <table>
               <thead>
-                <tr><th>Nome</th><th>Tipo</th><th>Opções</th><th></th></tr>
+                <tr><th>Grupo</th><th>Nome</th><th>Tipo</th><th>Opções</th><th></th></tr>
               </thead>
               <tbody>
                 {list.map((f) => (
                   <tr key={f.id} className="row" style={{ cursor: "default" }}>
-                    <td style={{ fontWeight: 700 }}>{f.label}</td>
+                    <td><span className="tag">{f.group}</span></td><td style={{ fontWeight: 700 }}>{f.label}</td>
                     <td>{TYPE_LABEL[f.type]}</td>
                     <td className="muted">{f.type === "SELECT" ? f.options.join(", ") : "—"}</td>
                     <td style={{ textAlign: "right" }}>
@@ -110,6 +110,7 @@ function NewFieldModal({
 }) {
   const [entity, setEntity] = useState(defaultEntity);
   const [label, setLabel] = useState("");
+  const [group, setGroup] = useState("Geral");
   const [type, setType] = useState<CustomFieldInput["type"]>("TEXT");
   const [optionsText, setOptionsText] = useState("");
   const [error, setError] = useState("");
@@ -122,6 +123,7 @@ function NewFieldModal({
       const res = await createCustomField({
         entity,
         label,
+        group,
         type,
         options: optionsText.split(",").map((o) => o.trim()).filter(Boolean),
       });
@@ -160,6 +162,7 @@ function NewFieldModal({
               <label>Nome do campo *</label>
               <input required value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Ex: CNPJ, Origem do lead" autoFocus />
             </div>
+            <div className="field"><label>Grupo</label><input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="Ex: Perfil, Empresa, Qualificação" /></div>
             <div className="field">
               <label>Tipo *</label>
               <select value={type} onChange={(e) => setType(e.target.value as CustomFieldInput["type"])}>

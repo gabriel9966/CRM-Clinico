@@ -6,6 +6,8 @@ import { requireAdminUser } from "@/lib/auth";
 import { encryptJson, decryptJson } from "@/lib/crypto";
 import * as evolution from "@/lib/providers/evolution";
 import * as email from "@/lib/providers/email";
+import * as azap from "@/lib/providers/azap";
+import * as whatsappCloud from "@/lib/providers/whatsapp-cloud";
 import { webhookUrl } from "@/lib/webhook-auth";
 
 function webhookUrlFor(connectionId: string) {
@@ -19,6 +21,11 @@ export async function getConnectionWebhookUrl(connectionId: string): Promise<{ u
   const connection = await prisma.connection.findFirst({ where: { id: connectionId, organizationId } });
   if (!connection) return { error: "Conexão não encontrada." };
   if (connection.provider === "WHATSAPP_EVOLUTION") return { url: webhookUrl("evolution", connection.id) };
+  if (connection.provider === "WHATSAPP_AZAP") return { url: webhookUrl("azap", connection.id) };
+  if (connection.provider === "WHATSAPP_CLOUD") {
+    const base = (process.env.APP_BASE_URL || "").replace(/\/+$/, "");
+    return { url: `${base}/api/webhooks/whatsapp-cloud` || "/api/webhooks/whatsapp-cloud" };
+  }
   if (connection.provider === "EMAIL") return { url: webhookUrl("email", connection.id) };
   return { error: "Este canal usa um webhook único configurado no painel da Meta." };
 }
@@ -116,11 +123,20 @@ export async function checkWhatsAppStatus(connectionId: string): Promise<{ statu
   const { organizationId } = await requireAdminUser();
   const connection = await prisma.connection.findFirst({ where: { id: connectionId, organizationId } });
   if (!connection) return { status: "DISCONNECTED", error: "Conexão não encontrada." };
-  const config = decryptJson<evolution.EvolutionConfig>(connection.config);
   try {
-    const res = await evolution.getConnectionState(config);
-    const state = res.instance?.state; // "open" | "connecting" | "close"
-    const status = state === "open" ? "CONNECTED" : state === "connecting" ? "CONNECTING" : "DISCONNECTED";
+    let status: "CONNECTED" | "CONNECTING" | "DISCONNECTED" = "CONNECTED";
+    if (connection.provider === "WHATSAPP_EVOLUTION") {
+      const config = decryptJson<evolution.EvolutionConfig>(connection.config);
+      const res = await evolution.getConnectionState(config);
+      const state = res.instance?.state; // "open" | "connecting" | "close"
+      status = state === "open" ? "CONNECTED" : state === "connecting" ? "CONNECTING" : "DISCONNECTED";
+    } else if (connection.provider === "WHATSAPP_CLOUD") {
+      await whatsappCloud.verifyConfig(decryptJson<whatsappCloud.WhatsAppCloudConfig>(connection.config));
+    } else if (connection.provider === "WHATSAPP_AZAP") {
+      await azap.verifyConfig(decryptJson<azap.AzapConfig>(connection.config));
+    } else {
+      return { status: connection.status, error: "Este canal não possui verificação manual." };
+    }
     await prisma.connection.update({ where: { id: connectionId }, data: { status, lastError: null } });
     revalidatePath("/connections");
     return { status };
@@ -223,6 +239,50 @@ export async function createEmailConnection(
   revalidatePath("/connections");
   if (status === "ERROR") return { error: lastError ?? undefined };
   return {};
+}
+
+export type CreateAzapState = { error?: string };
+export async function createAzapConnection(_prev: CreateAzapState, formData: FormData): Promise<CreateAzapState> {
+  const { organizationId } = await requireAdminUser();
+  const label = String(formData.get("label") || "").trim();
+  const sendUrl = String(formData.get("sendUrl") || "").trim();
+  const apiKey = String(formData.get("apiKey") || "").trim();
+  const instanceName = String(formData.get("instanceName") || "").trim();
+  if (!label || !sendUrl || !apiKey) return { error: "Preencha nome, URL de envio e chave da API." };
+  const config: azap.AzapConfig = { sendUrl, apiKey, instanceName: instanceName || undefined };
+  try {
+    await azap.verifyConfig(config);
+    await prisma.connection.create({ data: { organizationId, provider: "WHATSAPP_AZAP", label, status: "CONNECTED", config: encryptJson(config) } });
+    revalidatePath("/connections");
+    return {};
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "Falha ao validar a conexão AZAP." };
+  }
+}
+
+export type CreateWhatsAppCloudState = { error?: string };
+export async function createWhatsAppCloudConnection(_prev: CreateWhatsAppCloudState, formData: FormData): Promise<CreateWhatsAppCloudState> {
+  const { organizationId } = await requireAdminUser();
+  const label = String(formData.get("label") || "").trim();
+  const accessToken = String(formData.get("accessToken") || "").trim();
+  const phoneNumberId = String(formData.get("phoneNumberId") || "").trim();
+  const apiVersion = String(formData.get("apiVersion") || "v23.0").trim();
+  const verifyToken = String(formData.get("verifyToken") || "").trim();
+  if (!label || !accessToken || !phoneNumberId || !verifyToken) return { error: "Preencha os campos obrigatórios, inclusive o token de verificação." };
+  const config: whatsappCloud.WhatsAppCloudConfig = { accessToken, phoneNumberId, apiVersion, verifyToken };
+  try {
+    await whatsappCloud.verifyConfig(config);
+    await prisma.connection.create({ data: { organizationId, provider: "WHATSAPP_CLOUD", label, status: "CONNECTED", config: encryptJson(config) } });
+    revalidatePath("/connections");
+    return {};
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "Falha ao validar a Cloud API." };
+  }
+}
+
+export async function getWebhookLogs(connectionId?: string) {
+  const { organizationId } = await requireAdminUser();
+  return prisma.webhookLog.findMany({ where: { organizationId, ...(connectionId ? { connectionId } : {}) }, orderBy: { createdAt: "desc" }, take: 80, select: { id: true, source: true, event: true, statusCode: true, detail: true, createdAt: true, connectionId: true } });
 }
 
 export async function deleteConnection(connectionId: string) {

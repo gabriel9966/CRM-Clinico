@@ -9,6 +9,7 @@ import {
   getActivitiesPage,
   getAppointmentsPage,
   getChannelsFor,
+  getConversationMessagesPage,
   getContactDetail,
   getContactsPage,
   getConversationsPage,
@@ -70,18 +71,30 @@ export async function fetchStageSummaries(pipelineId: string) {
   return getStageSummaries(organizationId, pipelineId);
 }
 
-export async function fetchPipelineBoard(pipelineId: string, filters: { ownerId?: string; q?: string } = {}) {
+export async function fetchPipelineBoard(pipelineId: string, filters: { ownerId?: string; q?: string; tag?: string; overdue?: boolean; sort?: "newest" | "value" | "close" } = {}) {
   const { organizationId } = await requireOrgUser();
-  return getPipelineBoard(organizationId, pipelineId, { ownerId: filters.ownerId, q: sanitize(filters.q) });
+  return getPipelineBoard(organizationId, pipelineId, { ownerId: filters.ownerId, q: sanitize(filters.q), tag: sanitize(filters.tag, 50), overdue: filters.overdue, sort: filters.sort });
 }
 
 // Membro (MEMBER) só vê conversas dos contatos atribuídos a ele — a regra é
 // aplicada aqui no servidor, não só escondendo itens na tela.
-export async function fetchConversations(query: { q?: string; cursor?: string } = {}) {
+export async function fetchConversations(query: {
+  q?: string; cursor?: string; ownerId?: string; team?: string; connectionId?: string; provider?: "WHATSAPP_EVOLUTION" | "WHATSAPP_AZAP" | "WHATSAPP_CLOUD" | "INSTAGRAM" | "EMAIL";
+  tag?: string; stageId?: string; status?: "OPEN" | "CLOSED" | "ALL"; from?: string; to?: string;
+} = {}) {
   const user = await requireOrgUser();
   const page = await getConversationsPage(user.organizationId, {
     q: sanitize(query.q),
     cursor: query.cursor,
+    ownerId: query.ownerId,
+    team: sanitize(query.team, 60),
+    connectionId: query.connectionId,
+    provider: query.provider,
+    tag: sanitize(query.tag, 50),
+    stageId: query.stageId,
+    status: query.status,
+    from: query.from,
+    to: query.to,
     restrictToOwnerId: user.role === "ADMIN" ? undefined : user.id,
   });
   const channels: Record<string, ConversationChannelInfo> = await getChannelsFor(
@@ -94,6 +107,11 @@ export async function fetchConversations(query: { q?: string; cursor?: string } 
 export async function fetchThread(contactId: string, cursor?: string) {
   const user = await requireOrgUser();
   return getMessagesPage(user.organizationId, { id: user.id, role: user.role }, contactId, { cursor });
+}
+
+export async function fetchConversationThread(conversationId: string, cursor?: string) {
+  const user = await requireOrgUser();
+  return getConversationMessagesPage(user.organizationId, { id: user.id, role: user.role }, conversationId, { cursor });
 }
 
 export async function fetchActivities(filter: ActivityFilter, cursor?: string) {

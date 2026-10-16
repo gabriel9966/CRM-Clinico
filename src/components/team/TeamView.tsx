@@ -120,10 +120,10 @@ export function TeamView({
             isSelf={editing.id === currentUserId}
             busy={busy}
             onClose={() => setModalOpen(false)}
-            onSave={async (name, color) => {
+            onSave={async (name, color, team) => {
               setBusy(true);
               try {
-                await updateTeamMember(editing.id, { name, color });
+                await updateTeamMember(editing.id, { name, color, team });
                 router.refresh();
                 setModalOpen(false);
               } finally {
@@ -170,6 +170,10 @@ export function TeamView({
                   <div className="field">
                     <label>E-mail (login) *</label>
                     <input name="email" type="email" required placeholder="juliana@empresa.com" />
+                  </div>
+                  <div className="field">
+                    <label>Equipe</label>
+                    <input name="team" defaultValue="Geral" placeholder="Ex: Comercial" />
                   </div>
                   <div className="field">
                     <label>Senha provisória *</label>
@@ -219,12 +223,13 @@ function EditMemberModal({
   isSelf: boolean;
   busy: boolean;
   onClose: () => void;
-  onSave: (name: string, color: string) => void;
+  onSave: (name: string, color: string, team: string) => void;
   onDelete: () => void;
   onToggleActive: (isActive: boolean) => void;
 }) {
   const [name, setName] = useState(member.name);
   const [color, setColor] = useState(member.color);
+  const [team, setTeam] = useState(member.team);
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -236,7 +241,7 @@ function EditMemberModal({
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            onSave(name, color);
+            onSave(name, color, team);
           }}
         >
           <div className="modal-body">
@@ -247,6 +252,10 @@ function EditMemberModal({
             <div className="field">
               <label>E-mail</label>
               <input value={member.email} disabled />
+            </div>
+            <div className="field">
+              <label>Equipe</label>
+              <input value={team} onChange={(e) => setTeam(e.target.value)} placeholder="Ex: Comercial" />
             </div>
             <div className="field">
               <label>Cor do avatar</label>

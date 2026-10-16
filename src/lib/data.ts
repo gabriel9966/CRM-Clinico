@@ -37,6 +37,10 @@ export async function getPipelines(organizationId: string): Promise<PipelineDTO[
       label: s.label,
       color: s.color,
       order: s.order,
+      requiredFields: parseTags(s.requiredFields),
+      allowedTeams: parseTags(s.allowedTeams),
+      requireLossReason: s.requireLossReason,
+      automationIds: parseTags(s.automationIds),
       pipelineId: s.pipelineId,
     })),
   }));
@@ -125,6 +129,7 @@ export async function getCustomFieldDefinitions(organizationId: string): Promise
     entity: d.entity,
     key: d.key,
     label: d.label,
+    group: d.group,
     type: d.type,
     options: parseTags(d.options),
     order: d.order,
@@ -138,6 +143,9 @@ export async function getMessageTemplates(organizationId: string): Promise<Messa
     name: t.name,
     subject: t.subject,
     body: t.body,
+    cloudApproved: t.cloudApproved,
+    cloudTemplateName: t.cloudTemplateName,
+    cloudLanguage: t.cloudLanguage,
     createdAt: t.createdAt.toISOString(),
   }));
 }
@@ -219,6 +227,7 @@ export async function getTeamMembers(organizationId: string): Promise<TeamMember
     name: u.name,
     email: u.email,
     color: u.color,
+    team: u.team,
     role: u.role,
     isActive: u.isActive,
   }));

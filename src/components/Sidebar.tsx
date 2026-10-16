@@ -15,6 +15,7 @@ const NAV_GROUPS = [
       { href: "/pipeline", label: "Pipeline", icon: Icon.pipeline },
       { href: "/contacts", label: "Contatos", icon: Icon.contacts },
       { href: "/conversations", label: "Conversas", icon: Icon.chat },
+      { href: "/campaigns", label: "Campanhas", icon: Icon.zap, adminOnly: true },
     ],
   },
   {
@@ -30,6 +31,7 @@ const NAV_GROUPS = [
       { href: "/team", label: "Equipe", icon: Icon.team },
       { href: "/connections", label: "Conexões", icon: Icon.plug, adminOnly: true },
       { href: "/automations", label: "Automações", icon: Icon.zap, adminOnly: true },
+      { href: "/tags", label: "Tags", icon: Icon.settings, adminOnly: true },
       { href: "/custom-fields", label: "Campos extras", icon: Icon.settings },
       { href: "/mcp", label: "Integração MCP", icon: Icon.api, adminOnly: true },
     ],
