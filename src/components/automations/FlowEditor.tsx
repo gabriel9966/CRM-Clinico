@@ -344,6 +344,7 @@ function Editor({
               trigger={trigger}
               config={triggerConfig}
               pipelines={pipelines}
+              team={team}
               webhookUrl={origin ? `${origin}${webhookPath}` : webhookPath}
               webhookReady={savedTrigger === "WEBHOOK_RECEIVED" && trigger === "WEBHOOK_RECEIVED" && enabled && edges.some((edge) => edge.source === "trigger")}
               webhookNotice={!enabled ? "Ative a automação para receber chamadas." : !edges.some((edge) => edge.source === "trigger") ? "Conecte o gatilho à primeira etapa e salve o fluxo." : "Salve o fluxo com este gatilho para ativar a URL."}
@@ -369,6 +370,7 @@ function TriggerInspector({
   trigger,
   config,
   pipelines,
+  team,
   webhookUrl,
   webhookReady,
   webhookNotice,
@@ -378,6 +380,7 @@ function TriggerInspector({
   trigger: string;
   config: Record<string, unknown>;
   pipelines: PipelineDTO[];
+  team: TeamMemberDTO[];
   webhookUrl: string;
   webhookReady: boolean;
   webhookNotice: string;
@@ -489,6 +492,32 @@ function TriggerInspector({
           </div>
           <p className="muted" style={{ fontSize: 12 }}>A regra é disparada uma única vez, no primeiro ciclo após a data e hora escolhidas.</p>
         </>
+      )}
+
+      {trigger.startsWith("APPOINTMENT_") && (
+        <div className="automation-appointment-box">
+          <strong>Contexto do agendamento</strong>
+          <p>O fluxo recebe o agendamento em <code>payload.appointment</code> e usa automaticamente o contato vinculado para enviar mensagem, criar tarefa ou atualizar o negócio.</p>
+          {trigger === "APPOINTMENT_STARTING" && (
+            <div className="field">
+              <label>Disparar antes do início (minutos)</label>
+              <input type="number" min={1} max={10080} value={Number(config.minutesBefore ?? 60)} onChange={(event) => onChange({ minutesBefore: Math.max(1, Number(event.target.value) || 1) })} />
+              <div className="field-help">O sistema verifica a agenda a cada minuto e executa uma única vez por agendamento.</div>
+            </div>
+          )}
+          <div className="field">
+            <label>Responsável do agendamento (opcional)</label>
+            <select value={String(config.ownerId ?? "")} onChange={(event) => onChange({ ownerId: event.target.value || undefined })}>
+              <option value="">Qualquer responsável</option>
+              {team.filter((member) => member.isActive).map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <label>Canal de origem (opcional)</label>
+            <input defaultValue={String(config.bookingChannel ?? "")} placeholder="Ex.: WhatsApp, site, telefone" onBlur={(event) => onChange({ bookingChannel: event.target.value.trim() || undefined })} />
+          </div>
+          {trigger !== "APPOINTMENT_STARTING" && <p className="field-help">Este fluxo dispara quando o evento acontecer. Use “Agendamento vai começar” para lembretes antes do horário.</p>}
+        </div>
       )}
 
       {(trigger === "CONTACT_CREATED" || trigger === "OPPORTUNITY_CREATED" || trigger === "MESSAGE_RECEIVED") && (
@@ -736,7 +765,7 @@ function CodeInspector({ code, onChange }: { code: string; onChange: (code: stri
     <>
       <h3>Código JS</h3>
       <div className="hint">Etapa avançada: executa JavaScript no servidor quando o fluxo chega aqui.</div>
-      <div className="automation-code-intro"><strong>O que são as funções <code>crm.*</code>?</strong><p>São funções prontas do próprio CRM para consultar dados ou realizar ações. Use <code>await</code> quando chamar uma delas. <code>payload</code> contém o JSON do webhook; <code>contact</code> e <code>opportunity</code> representam os registros vinculados à execução.</p></div>
+      <div className="automation-code-intro"><strong>O que são as funções <code>crm.*</code>?</strong><p>São funções prontas do próprio CRM para consultar dados ou realizar ações. Use <code>await</code> quando chamar uma delas. <code>payload</code> contém os dados do evento; <code>contact</code>, <code>opportunity</code> e <code>appointment</code> representam os registros vinculados à execução.</p></div>
       <div className="automation-code-tools">
         <button type="button" className="btn small" onClick={() => setExpanded(true)}>Abrir editor ampliado</button>
       </div>
@@ -764,7 +793,7 @@ function CodeInspector({ code, onChange }: { code: string; onChange: (code: stri
       {expanded && (
         <div className="modal-overlay automation-code-overlay" onClick={() => setExpanded(false)}>
           <div className="automation-code-dialog" role="dialog" aria-modal="true" aria-label="Editor de código JavaScript" onClick={(event) => event.stopPropagation()}>
-            <div className="automation-code-dialog-head"><div><h2>Código JS</h2><p>Use <code>payload</code>, <code>contact</code>, <code>opportunity</code> e as funções <code>crm.*</code>.</p></div><button className="btn small" onClick={() => setExpanded(false)}>Concluir edição</button></div>
+            <div className="automation-code-dialog-head"><div><h2>Código JS</h2><p>Use <code>payload</code>, <code>contact</code>, <code>opportunity</code>, <code>appointment</code> e as funções <code>crm.*</code>.</p></div><button className="btn small" onClick={() => setExpanded(false)}>Concluir edição</button></div>
             {editor(true)}
             <div className="automation-code-dialog-foot">As alterações ficam no editor até você clicar em “Salvar fluxo”.</div>
           </div>

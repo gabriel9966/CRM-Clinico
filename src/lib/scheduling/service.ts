@@ -3,6 +3,7 @@ import { prisma, type DbClient } from "../prisma";
 import { writeAudit } from "../audit";
 import { AppError } from "../errors";
 import { updateCalendarEvent, deleteCalendarEvent } from "../providers/google-calendar";
+import { triggerAppointmentAutomations } from "../automation/engine";
 import {
   computeDaySlots,
   pickLeastLoaded,
@@ -35,6 +36,18 @@ type RangeData = {
 };
 
 export { writeAudit };
+
+function automationAppointment(appointment: { id: string; contactId: string | null; ownerId: string | null; professionalId: string | null; procedureId: string | null; bookingChannel: string | null; startAt: Date; status: string }) {
+  return { id: appointment.id, contactId: appointment.contactId, ownerId: appointment.ownerId, professionalId: appointment.professionalId, procedureId: appointment.procedureId, bookingChannel: appointment.bookingChannel, startAt: appointment.startAt, status: appointment.status };
+}
+
+async function fireAppointmentAutomation(organizationId: string, trigger: Parameters<typeof triggerAppointmentAutomations>[1], appointment: Parameters<typeof triggerAppointmentAutomations>[2]) {
+  // O agendamento já foi persistido; uma falha num fluxo opcional nunca pode
+  // transformar uma reserva, remarcação ou cancelamento em erro para o cliente.
+  await triggerAppointmentAutomations(organizationId, trigger, appointment).catch((error) => {
+    console.error("[automations] falha ao disparar evento de agenda:", error);
+  });
+}
 
 async function loadRange(
   db: Db,
@@ -416,7 +429,12 @@ export async function bookAppointment(organizationId: string, input: BookInput) 
   };
 
   try {
-    return await prisma.$transaction(run, { isolationLevel: "Serializable" });
+    const result = await prisma.$transaction(run, { isolationLevel: "Serializable" });
+    if ("id" in result && result.idempotent === false) {
+      const created = await prisma.appointment.findUnique({ where: { id: result.id } });
+      if (created) await fireAppointmentAutomation(organizationId, "APPOINTMENT_CREATED", automationAppointment(created));
+    }
+    return result;
   } catch (err) {
     // Duas reservas simultâneas no mesmo horário: o banco recusa uma delas.
     if (typeof err === "object" && err && "code" in err && (err as { code?: string }).code === "P2034") {
@@ -465,6 +483,7 @@ export async function cancelAppointment(
   if (existing.googleEventId && existing.ownerId) {
     await deleteCalendarEvent(existing.ownerId, existing.googleEventId).catch(() => {});
   }
+  await fireAppointmentAutomation(organizationId, "APPOINTMENT_CANCELLED", automationAppointment({ ...existing, status: "CANCELLED" }));
   return { id, status: "CANCELLED" as const, idempotent: false };
 }
 
@@ -522,6 +541,7 @@ export async function rescheduleAppointment(
       endAt: updated.endAt,
     }).catch(() => {});
   }
+  await fireAppointmentAutomation(organizationId, "APPOINTMENT_RESCHEDULED", automationAppointment(updated));
   return {
     ...serialize(updated, pick.timezone),
     professionalName: pick.professionalName,
@@ -553,5 +573,6 @@ export async function markNoShow(
       meta: { reason: opts.reason ?? null },
     });
   });
+  await fireAppointmentAutomation(organizationId, "APPOINTMENT_NO_SHOW", automationAppointment({ ...existing, status: "NO_SHOW" }));
   return { id, status: "NO_SHOW" as const, idempotent: false };
 }

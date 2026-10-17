@@ -12,6 +12,41 @@ import { softDeleteOpportunity } from "@/lib/soft-delete";
 import { syncTags } from "@/lib/crm-catalog";
 import type { ImportSummary } from "@/app/contacts/actions";
 
+export type OpportunityStageHistoryDTO = {
+  id: string;
+  stageId: string;
+  stageLabel: string;
+  stageColor: string;
+  stageOrder: number;
+  enteredAt: string;
+  exitedAt: string | null;
+};
+
+/** Histórico append-only do funil. O tempo da etapa atual é calculado no
+ * cliente contra o momento presente para continuar atualizando sem gravar. */
+export async function getOpportunityStageHistory(opportunityId: string): Promise<OpportunityStageHistoryDTO[]> {
+  const user = await requireOrgUser();
+  const opportunity = await prisma.opportunity.findFirst({
+    where: { id: opportunityId, organizationId: user.organizationId },
+    select: { id: true },
+  });
+  if (!opportunity) return [];
+  const history = await prisma.opportunityStageHistory.findMany({
+    where: { opportunityId, organizationId: user.organizationId },
+    include: { stage: { select: { id: true, label: true, color: true, order: true } } },
+    orderBy: [{ enteredAt: "asc" }, { id: "asc" }],
+  });
+  return history.map((item) => ({
+    id: item.id,
+    stageId: item.stageId,
+    stageLabel: item.stage.label,
+    stageColor: item.stage.color,
+    stageOrder: item.stage.order,
+    enteredAt: item.enteredAt.toISOString(),
+    exitedAt: item.exitedAt?.toISOString() ?? null,
+  }));
+}
+
 const DEFAULT_STAGES = [
   { label: "Novo Lead", color: "#64748b" },
   { label: "Contato Feito", color: "#2563eb" },

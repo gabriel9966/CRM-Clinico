@@ -7,10 +7,12 @@ vi.mock("../crypto", () => ({ decryptJson: vi.fn(() => ({ baseUrl: "http://evo",
 vi.mock("../providers/evolution", () => ({ sendText: vi.fn() }));
 vi.mock("../providers/instagram", () => ({ sendText: vi.fn() }));
 vi.mock("../providers/email", () => ({ sendText: vi.fn() }));
+vi.mock("../providers/whatsapp-cloud", () => ({ sendText: vi.fn() }));
 
 const { decryptJson } = await import("../crypto");
 const evolution = await import("../providers/evolution");
 const instagram = await import("../providers/instagram");
+const whatsappCloud = await import("../providers/whatsapp-cloud");
 const { sendContactMessage, getSendOptions, whatsappNumber } = await import("../messaging");
 
 const ORG = "org-1";
@@ -81,6 +83,32 @@ describe("sendContactMessage — toda mensagem sai por um canal real", () => {
     const r = await sendContactMessage(ORG, "c1", "Oi");
     expect(r).toMatchObject({ ok: false, code: "canal_desconectado" });
     expect(mockPrisma.message.create).not.toHaveBeenCalled();
+  });
+
+  it("API oficial bloqueia texto livre sem mensagem recebida nas últimas 24 horas", async () => {
+    const wa = conn("cloud-1", "WHATSAPP_CLOUD");
+    setup({ channels: [channel(wa, "5547988887777")], connections: [wa] });
+    mockPrisma.message.findFirst.mockResolvedValue(null);
+    expect(await sendContactMessage(ORG, "c1", "Oi")).toMatchObject({ ok: false, code: "janela_24h_encerrada" });
+    expect(whatsappCloud.sendText).not.toHaveBeenCalled();
+    expect(mockPrisma.message.create).not.toHaveBeenCalled();
+  });
+
+  it("API oficial permite texto livre com resposta recente do cliente na mesma instância", async () => {
+    const wa = conn("cloud-1", "WHATSAPP_CLOUD");
+    setup({ channels: [channel(wa, "5547988887777")], connections: [wa] });
+    mockPrisma.message.findFirst.mockResolvedValue({ time: new Date(Date.now() - 60_000) });
+    expect(await sendContactMessage(ORG, "c1", "Oi")).toMatchObject({ ok: true, status: "sent" });
+    expect(mockPrisma.message.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ connectionId: "cloud-1", direction: "in" }) }));
+    expect(whatsappCloud.sendText).toHaveBeenCalled();
+  });
+
+  it("API oficial encerra a janela após 24 horas da última mensagem do cliente", async () => {
+    const wa = conn("cloud-1", "WHATSAPP_CLOUD");
+    setup({ channels: [channel(wa, "5547988887777")], connections: [wa] });
+    mockPrisma.message.findFirst.mockResolvedValue({ time: new Date(Date.now() - 24 * 60 * 60 * 1000 - 1000) });
+    expect(await sendContactMessage(ORG, "c1", "Oi")).toMatchObject({ ok: false, code: "janela_24h_encerrada" });
+    expect(whatsappCloud.sendText).not.toHaveBeenCalled();
   });
 
   it("provedor recusou o envio: registra como 'failed' (visível) e informa o motivo", async () => {

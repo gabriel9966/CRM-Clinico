@@ -33,6 +33,7 @@ model Organization {
   opportunities Opportunity[]
   messages      Message[]
   conversations Conversation[]
+  privateNotes ConversationPrivateNote[]
   activities    Activity[]
   appointments  Appointment[]
   professionals Professional[]
@@ -89,6 +90,7 @@ model User {
   ownedOpportunities Opportunity[] @relation("OpportunityOwner")
   ownedConversations Conversation[] @relation("ConversationOwner")
   sentMessages       Message[]     @relation("MessageSender")
+  privateNotes        ConversationPrivateNote[]
   activities         Activity[]    @relation("ActivityAssignee")
   appointments       Appointment[] @relation("AppointmentOwner")
   googleAccount      GoogleAccount?
@@ -584,11 +586,27 @@ model Conversation {
   owner   User? @relation("ConversationOwner", fields: [ownerId], references: [id], onDelete: SetNull)
 
   messages Message[]
+  privateNotes ConversationPrivateNote[]
 
   @@index([organizationId, lastMessageAt])
   @@index([organizationId, ownerId, status])
   @@unique([contactId, connectionId])
   @@index([contactId, connectionId])
+}
+
+// Anotação visível exclusivamente ao autor, nunca enviada ao provedor.
+model ConversationPrivateNote {
+  id             String   @id @default(cuid())
+  text           String
+  createdAt      DateTime @default(now())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  authorId       String
+  author         User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, conversationId, authorId, createdAt])
 }
 
 enum ConnectionProvider {
@@ -728,6 +746,12 @@ enum AutomationTrigger {
   WEBHOOK_RECEIVED
   CONTACT_INACTIVE
   DATE_REACHED
+  APPOINTMENT_CREATED
+  APPOINTMENT_RESCHEDULED
+  APPOINTMENT_CANCELLED
+  APPOINTMENT_CONFIRMED
+  APPOINTMENT_NO_SHOW
+  APPOINTMENT_STARTING
 }
 
 // Uma automação: um fluxo visual (nós + arestas, no formato do React Flow)
@@ -774,11 +798,16 @@ model AutomationRun {
 
   contactId     String?
   opportunityId String?
+  // Preenchido pelos gatilhos de agenda para tornar lembretes idempotentes:
+  // uma mesma automação só roda uma vez por agendamento.
+  appointmentId String?
   payload       String? // JSON bruto recebido (gatilho de webhook), guardado pra o nó de código acessar
 
   schedule AutomationSchedule?
 
   @@index([automationId])
+  @@index([appointmentId])
+  @@unique([automationId, appointmentId])
 }
 
 // Um passo de "espera" agendado: quando o motor chega num nó de delay, grava

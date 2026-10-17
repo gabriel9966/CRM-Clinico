@@ -19,7 +19,7 @@ import type {
   SendOptionDTO,
   TeamMemberDTO,
 } from "@/lib/types";
-import { assignConversation, fetchConversationEvents, fetchConversationSendOptions, retryFailedMessage, sendMessage, setConversationStatus, updateConversationTags } from "@/app/conversations/actions";
+import { addPrivateNote, assignConversation, fetchConversationEvents, fetchConversationSendOptions, fetchPrivateNotes, retryFailedMessage, sendMessage, setConversationStatus, updateConversationTags, type PrivateNoteDTO } from "@/app/conversations/actions";
 import { fetchContactDetail, fetchConversationThread, fetchConversations } from "@/app/listings/actions";
 import { createMessageTemplate, deleteMessageTemplate } from "@/app/templates/actions";
 import { createActivity, type ActivityInput } from "@/app/activities/actions";
@@ -108,8 +108,11 @@ export function ConversationsView({
 
   // Conversa aberta: mensagens da mais recente para trás, sob demanda.
   const [selectedId, setSelectedId] = useState<string | null>(initialPage.items[0]?.id ?? null);
+  const [selectedSnapshot, setSelectedSnapshot] = useState<ConversationRowDTO | null>(initialPage.items[0] ?? null);
   const [selectedContact, setSelectedContact] = useState<ContactDTO | null>(initialPage.items[0]?.contact ?? null);
   const [messages, setMessages] = useState<MessageDTO[]>(initialThread?.items ?? []);
+  const [privateNotes, setPrivateNotes] = useState<PrivateNoteDTO[]>([]);
+  const [composerMode, setComposerMode] = useState<"message" | "private">("message");
   const [olderCursor, setOlderCursor] = useState<string | null>(initialThread?.nextCursor ?? null);
   const [threadLoading, setThreadLoading] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -120,6 +123,7 @@ export function ConversationsView({
   const [chosenConnection, setChosenConnection] = useState<string>("");
   const [sendError, setSendError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [windowNow, setWindowNow] = useState(() => Date.now());
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [manageTemplatesOpen, setManageTemplatesOpen] = useState(false);
   const [customerPanelOpen, setCustomerPanelOpen] = useState(false);
@@ -130,12 +134,19 @@ export function ConversationsView({
   const [quickAction, setQuickAction] = useState<"task" | "opportunity" | null>(null);
   const [quickActionBusy, setQuickActionBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const messageDraft = useRef("");
+  const noteDraft = useRef("");
   const bodyRef = useRef<HTMLDivElement>(null);
   const listSeq = useRef(0);
   const threadSeq = useRef(0);
   const selectedIdRef = useRef<string | null>(initialPage.items[0]?.id ?? null);
   const pagesLoaded = useRef(1);
   const skipFirstListLoad = useRef(true);
+  useEffect(() => {
+    if (!window.matchMedia("(min-width: 1100px)").matches) return;
+    const frame = requestAnimationFrame(() => setCustomerPanelOpen(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
 
   function ownerOf(ownerId: string | null) {
     return ownerId ? team.find((m) => m.id === ownerId) : undefined;
@@ -143,9 +154,14 @@ export function ConversationsView({
 
   // A conversa aberta continua na tela mesmo que a busca da lista deixe de
   // listá-la: guardamos o contato escolhido além das linhas carregadas.
-  const activeRow = rows.find((r) => r.id === selectedId) ?? null;
+  const activeRow = rows.find((r) => r.id === selectedId) ?? selectedSnapshot;
   const activeContact = activeRow?.contact ?? selectedContact;
   const activeChannel = activeRow?.channel ?? null;
+  const cloudWindowEnds = activeChannel?.provider === "WHATSAPP_CLOUD" && activeRow?.lastInboundAt
+    ? new Date(activeRow.lastInboundAt).getTime() + 24 * 60 * 60 * 1000 : null;
+  const cloudWindowOpen = cloudWindowEnds !== null && cloudWindowEnds > windowNow;
+  const cloudWindowClosed = activeChannel?.provider === "WHATSAPP_CLOUD" && !cloudWindowOpen;
+  useEffect(() => { const timer = setInterval(() => setWindowNow(Date.now()), 30000); return () => clearInterval(timer); }, []);
   const activeOwner = ownerOf(activeRow?.ownerId ?? null);
   const defaultPipeline = pipelines[0];
   const linkedChannels = sendOptions.filter((option) => option.existing);
@@ -154,8 +170,18 @@ export function ConversationsView({
   async function changeAssignee(ownerId: string | null, mode: "assign" | "transfer" | "claim" = "assign") {
     if (!activeRow) return;
     const result = await assignConversation(activeRow.id, ownerId, mode);
-    if (!result.ok) return;
+    if (!result.ok) { setSendError(result.error ?? "Não foi possível atribuir o atendimento."); return; }
     setRows((prev) => prev.map((row) => (row.id === activeRow.id ? { ...row, ownerId } : row)));
+    setSelectedSnapshot((row) => row?.id === activeRow.id ? { ...row, ownerId } : row);
+    router.refresh();
+  }
+
+  async function changeStatus(status: "OPEN" | "CLOSED") {
+    if (!activeRow) return;
+    const result = await setConversationStatus(activeRow.id, status);
+    if (!result.ok) { setSendError(result.error ?? "Não foi possível alterar o atendimento."); return; }
+    setRows((prev) => prev.map((row) => row.id === activeRow.id ? { ...row, status } : row));
+    setSelectedSnapshot((row) => row?.id === activeRow.id ? { ...row, status } : row);
     router.refresh();
   }
 
@@ -165,7 +191,7 @@ export function ConversationsView({
       const mine = ++listSeq.current;
       setListLoading(true);
       try {
-        const { page } = await fetchConversations({ q: q.trim() || undefined, ...filters, provider: (filters.provider || undefined) as "WHATSAPP_EVOLUTION" | "INSTAGRAM" | "EMAIL" | undefined, status: filters.status as "OPEN" | "CLOSED" | "ALL" });
+        const { page } = await fetchConversations({ q: q.trim() || undefined, ...filters, provider: (filters.provider || undefined) as NonNullable<ConnectionDTO["provider"]> | undefined, status: filters.status as "OPEN" | "CLOSED" | "ALL" });
         if (mine !== listSeq.current) return;
         setRows(page.items);
         setNextCursor(page.nextCursor);
@@ -191,9 +217,9 @@ export function ConversationsView({
     setLoadingMore(true);
     const mine = listSeq.current;
     try {
-      const { page } = await fetchConversations({ q: search.trim() || undefined, cursor: nextCursor, ...filters, provider: (filters.provider || undefined) as "WHATSAPP_EVOLUTION" | "INSTAGRAM" | "EMAIL" | undefined, status: filters.status as "OPEN" | "CLOSED" | "ALL" });
+      const { page } = await fetchConversations({ q: search.trim() || undefined, cursor: nextCursor, ...filters, provider: (filters.provider || undefined) as NonNullable<ConnectionDTO["provider"]> | undefined, status: filters.status as "OPEN" | "CLOSED" | "ALL" });
       if (mine !== listSeq.current) return;
-      setRows((prev) => [...prev, ...page.items.filter((r) => !prev.some((p) => p.contact.id === r.contact.id))]);
+      setRows((prev) => [...prev, ...page.items.filter((r) => !prev.some((p) => p.id === r.id))]);
       setNextCursor(page.nextCursor);
       pagesLoaded.current += 1;
     } finally {
@@ -221,13 +247,18 @@ export function ConversationsView({
     if (row.id === selectedId) return;
     selectedIdRef.current = row.id;
     setSelectedId(row.id);
+    setSelectedSnapshot(row);
     setSelectedContact(row.contact);
     setMessages([]);
+    setPrivateNotes([]);
+    setComposerMode("message");
+    messageDraft.current = "";
+    noteDraft.current = "";
+    if (inputRef.current) inputRef.current.value = "";
     setOlderCursor(null);
     setSendOptions([]);
     setChosenConnection("");
     setSendError(null);
-    setCustomerPanelOpen(false);
     setCustomerDetail(null);
     loadThread(row.id);
     fetchConversationSendOptions(row.id).then((opts) => {
@@ -256,10 +287,20 @@ export function ConversationsView({
 
   // Rola para a última mensagem ao abrir a conversa e quando chega mensagem nova.
   const lastMessageId = messages[messages.length - 1]?.id;
+  const timeline = useMemo(() => [
+    ...messages.map((message) => ({ kind: "message" as const, time: message.time, message })),
+    ...privateNotes.map((note) => ({ kind: "note" as const, time: note.createdAt, note })),
+  ].sort((a, b) => a.time.localeCompare(b.time)), [messages, privateNotes]);
+  useEffect(() => {
+    if (!selectedId) return;
+    let live = true;
+    fetchPrivateNotes(selectedId).then((notes) => { if (live) setPrivateNotes(notes); });
+    return () => { live = false; };
+  }, [selectedId]);
   useEffect(() => {
     const el = bodyRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [selectedId, lastMessageId]);
+  }, [selectedId, lastMessageId, privateNotes.length]);
 
   // ── Atualização periódica (no lugar de tempo real) ────────────────────────
   useEffect(() => {
@@ -311,11 +352,38 @@ export function ConversationsView({
     }
   }
 
+  const selectedContactId = selectedContact?.id;
+  useEffect(() => {
+    if (!selectedId || !selectedContactId || !customerPanelOpen) return;
+    let live = true;
+    Promise.all([fetchContactDetail(selectedContactId), fetchConversationEvents(selectedId)]).then(([detail, history]) => {
+      if (!live) return;
+      setCustomerDetail(detail);
+      setEvents(history);
+      setTagDraft(detail?.contact.tags.join(", ") ?? "");
+      setCustomerDetailLoading(false);
+    });
+    return () => { live = false; };
+  }, [selectedId, selectedContactId, customerPanelOpen]);
+
   async function handleSend(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!activeContact || !inputRef.current) return;
     const text = inputRef.current.value.trim();
     if (!text) return;
+    if (composerMode === "private") {
+      if (!selectedId) return;
+      setSending(true);
+      try {
+        const result = await addPrivateNote(selectedId, text);
+        if (!result.ok) { setSendError(result.error); return; }
+        setPrivateNotes((notes) => [...notes, result.note]);
+        inputRef.current.value = "";
+        noteDraft.current = "";
+        setSendError(null);
+      } finally { setSending(false); }
+      return;
+    }
     setSending(true);
     setSendError(null);
     try {
@@ -328,6 +396,7 @@ export function ConversationsView({
         return;
       }
       inputRef.current.value = "";
+      messageDraft.current = "";
       if (result.status === "failed") {
         setSendError(`A mensagem foi registrada, mas o canal recusou o envio${result.error ? `: ${result.error}` : ""}.`);
       }
@@ -337,6 +406,16 @@ export function ConversationsView({
     } finally {
       setSending(false);
     }
+  }
+
+  function switchComposerMode(next: "message" | "private") {
+    if (next === composerMode) return;
+    if (composerMode === "message") messageDraft.current = inputRef.current?.value ?? "";
+    else noteDraft.current = inputRef.current?.value ?? "";
+    if (inputRef.current) inputRef.current.value = next === "message" ? messageDraft.current : noteDraft.current;
+    setComposerMode(next);
+    setTemplatesOpen(false);
+    setSendError(null);
   }
 
   async function retryMessage(messageId: string) {
@@ -401,7 +480,7 @@ export function ConversationsView({
               <div className="conversation-filters">
                 <label>Atendente<select value={filters.ownerId} onChange={(e) => setFilters((f) => ({ ...f, ownerId: e.target.value }))}><option value="">Todos</option><option value="unassigned">Sem atendente</option>{team.filter((member) => member.isActive).map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}</select></label>
                 <label>Equipe<select value={filters.team} onChange={(e) => setFilters((f) => ({ ...f, team: e.target.value }))}><option value="">Todas</option>{[...new Set(team.map((member) => member.team))].sort().map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
-                <label>Canal<select value={filters.provider} onChange={(e) => setFilters((f) => ({ ...f, provider: e.target.value, connectionId: "" }))}><option value="">Todos</option><option value="WHATSAPP_EVOLUTION">WhatsApp</option><option value="INSTAGRAM">Instagram</option><option value="EMAIL">E-mail</option></select></label>
+                <label>Canal<select value={filters.provider} onChange={(e) => setFilters((f) => ({ ...f, provider: e.target.value, connectionId: "" }))}><option value="">Todos</option><option value="WHATSAPP_EVOLUTION">WhatsApp · Evolution</option><option value="WHATSAPP_AZAP">WhatsApp · AZAP</option><option value="WHATSAPP_CLOUD">WhatsApp · Oficial</option><option value="INSTAGRAM">Instagram</option><option value="EMAIL">E-mail</option></select></label>
                 <label>Instância<select value={filters.connectionId} onChange={(e) => setFilters((f) => ({ ...f, connectionId: e.target.value }))}><option value="">Todas</option>{connections.filter((connection) => !filters.provider || connection.provider === filters.provider).map((connection) => <option key={connection.id} value={connection.id}>{PROVIDER_NAME[connection.provider]} · {connection.label}</option>)}</select></label>
                 <label>Tag<select value={filters.tag} onChange={(e) => setFilters((f) => ({ ...f, tag: e.target.value }))}><option value="">Todas</option>{tags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select></label>
                 <label>Etapa<select value={filters.stageId} onChange={(e) => setFilters((f) => ({ ...f, stageId: e.target.value }))}><option value="">Todas</option>{pipelines.flatMap((pipeline) => pipeline.stages.map((stage) => <option key={stage.id} value={stage.id}>{pipeline.name} · {stage.label}</option>))}</select></label>
@@ -479,6 +558,7 @@ export function ConversationsView({
                       <span>CANAL DA CONVERSA</span>
                       <ChannelBadge channel={activeChannel} />
                       <small>{activeChannel ? `Instância/conexão: ${activeChannel.label}` : "Sem vínculo: não é possível identificar a instância."}</small>
+                      {activeChannel?.provider === "WHATSAPP_CLOUD" && <small className={cloudWindowOpen ? "conversation-window-open" : "conversation-window-closed"}>{cloudWindowOpen ? `Janela 24h aberta até ${new Date(cloudWindowEnds!).toLocaleString("pt-BR")}` : "Janela 24h encerrada · somente template aprovado"}</small>}
                     </div>
                     {currentUserRole === "ADMIN" ? (
                       <label className="conversation-assignment">
@@ -497,9 +577,9 @@ export function ConversationsView({
                   </div>
                   <div className="conversation-actions">
                     {activeRow?.status === "OPEN" ? (
-                      <button type="button" className="btn small" onClick={() => activeRow && setConversationStatus(activeRow.id, "CLOSED").then(() => { setRows((prev) => prev.map((row) => row.id === activeRow.id ? { ...row, status: "CLOSED" } : row)); router.refresh(); })}>Finalizar</button>
+                      <button type="button" className="btn small" onClick={() => changeStatus("CLOSED")}>Finalizar</button>
                     ) : (
-                      <button type="button" className="btn small primary" onClick={() => activeRow && setConversationStatus(activeRow.id, "OPEN").then(() => { setRows((prev) => prev.map((row) => row.id === activeRow.id ? { ...row, status: "OPEN" } : row)); router.refresh(); })}>Reabrir</button>
+                      <button type="button" className="btn small primary" onClick={() => changeStatus("OPEN")}>Reabrir</button>
                     )}
                     {activeRow?.ownerId !== currentUserId && <button type="button" className="btn small" onClick={() => changeAssignee(null, "claim")}>Assumir</button>}
                     <button type="button" className="btn small" onClick={openCustomerPanel}>Ficha</button>
@@ -513,19 +593,21 @@ export function ConversationsView({
                       </button>
                     </div>
                   )}
-                  {messages.length === 0 ? (
+                  {timeline.length === 0 ? (
                     <div className="thread-empty">
                       <Icon.empty />
                       <div>{threadLoading ? "Carregando…" : "Nenhuma mensagem ainda. Diga olá!"}</div>
                     </div>
                   ) : (
-                    messages.map((m) => (
-                      <div key={m.id} className={`bubble-row ${m.direction === "out" ? "me" : "them"}`}>
+                    timeline.map((item) => item.kind === "note" ? (
+                      <div key={`note-${item.note.id}`} className="private-note"><strong>Nota privada · só você vê</strong><div>{item.note.text}</div><small>{fmtTime(item.note.createdAt)}</small></div>
+                    ) : (
+                      <div key={item.message.id} className={`bubble-row ${item.message.direction === "out" ? "me" : "them"}`}>
                         <div className="bubble">
-                          {m.text}
-                          <span className="time">{fmtTime(m.time)}</span>
-                          {m.status === "failed" && <button type="button" className="btn small" disabled={sending || activeRow?.status === "CLOSED"} onClick={() => retryMessage(m.id)}>Tentar novamente</button>}
-                          {m.status === "failed" && (
+                          {item.message.text}
+                          <span className="time">{fmtTime(item.message.time)}</span>
+                          {item.message.status === "failed" && <button type="button" className="btn small" disabled={sending || activeRow?.status === "CLOSED" || cloudWindowClosed} onClick={() => retryMessage(item.message.id)}>Tentar novamente</button>}
+                          {item.message.status === "failed" && (
                             <span style={{ display: "block", fontSize: 11, fontWeight: 700, color: "#fecaca", marginTop: 2 }}>
                               ⚠ Não foi entregue — o canal recusou o envio
                             </span>
@@ -535,12 +617,12 @@ export function ConversationsView({
                     ))
                   )}
                 </div>
-                {usableChannels.length === 0 || activeRow?.status === "CLOSED" ? (
+                {usableChannels.length === 0 || activeRow?.status === "CLOSED" || cloudWindowClosed ? (
                   <div
                     role="alert"
                     style={{ padding: "10px 16px", fontSize: 12, fontWeight: 600, color: "var(--orange)", background: "var(--orange-soft, #fff7ed)", borderTop: "1px solid var(--border-soft)" }}
                   >
-                    {activeRow?.status === "CLOSED" ? "Este atendimento foi finalizado. Reabra-o para enviar uma nova mensagem." : noChannelReason}
+                    {activeRow?.status === "CLOSED" ? "Este atendimento foi finalizado. Reabra-o para enviar uma nova mensagem." : cloudWindowClosed ? "Janela de 24h encerrada para esta instância oficial. Texto livre bloqueado; para retomar, envie um template aprovado pela Meta. Os 'Modelos' locais não são templates oficiais." : noChannelReason}
                   </div>
                 ) : (
                   <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 16px 0", fontSize: 12 }}>
@@ -571,7 +653,9 @@ export function ConversationsView({
                     {sendError}
                   </div>
                 )}
-                <form className="thread-input" onSubmit={handleSend} style={{ position: "relative" }}>
+                <div className="composer-modes"><button type="button" className={composerMode === "message" ? "active" : ""} onClick={() => switchComposerMode("message")}>Mensagem ao cliente</button><button type="button" className={composerMode === "private" ? "active" : ""} onClick={() => switchComposerMode("private")}>Nota privada · só eu</button></div>
+                <form className={`thread-input ${composerMode === "private" ? "private-composer" : ""}`} onSubmit={handleSend} style={{ position: "relative" }}>
+                  {composerMode === "message" && (
                   <button
                     type="button"
                     className="btn small"
@@ -579,13 +663,15 @@ export function ConversationsView({
                   >
                     Modelos
                   </button>
+                  )}
                   <input
                     ref={inputRef}
-                    placeholder={usableChannels.length === 0 ? "Sem canal para enviar" : "Escreva uma mensagem..."}
+                    onChange={(event) => { if (composerMode === "private") noteDraft.current = event.target.value; else messageDraft.current = event.target.value; }}
+                    placeholder={composerMode === "private" ? "Escreva uma anotação pessoal (não será enviada ao cliente)..." : usableChannels.length === 0 ? "Sem canal para enviar" : "Escreva uma mensagem..."}
                     autoComplete="off"
-                    disabled={usableChannels.length === 0 || activeRow?.status === "CLOSED"}
+                    disabled={composerMode === "message" && (usableChannels.length === 0 || activeRow?.status === "CLOSED" || cloudWindowClosed)}
                   />
-                  <button type="submit" className="btn primary icon-only" disabled={sending || usableChannels.length === 0 || activeRow?.status === "CLOSED"}><Icon.send /></button>
+                  <button type="submit" className="btn primary icon-only" disabled={sending || (composerMode === "message" && (usableChannels.length === 0 || activeRow?.status === "CLOSED" || cloudWindowClosed))}><Icon.send /></button>
 
                   {templatesOpen && (
                     <div className="modal" style={{ position: "absolute", bottom: "100%", left: 0, width: 320, maxHeight: 260, overflowY: "auto", marginBottom: 8, zIndex: 10 }}>
@@ -679,6 +765,7 @@ export function ConversationsView({
                     {customerDetail.opportunities.length === 0 ? <span className="muted">Nenhuma oportunidade cadastrada.</span> : customerDetail.opportunities.slice(0, 4).map((opportunity) => (
                       <div key={opportunity.id} className="context-opportunity">
                         <strong>{opportunity.title}</strong>
+                        <span>{pipelines.find((item) => item.id === opportunity.pipelineId)?.name ?? "Pipeline não encontrado"} · {pipelines.flatMap((item) => item.stages).find((stage) => stage.id === opportunity.stageId)?.label ?? "Etapa não encontrada"}</span>
                         <span>{fmtMoney(opportunity.value)}{opportunity.expectedClose ? ` · ${fmtDate(opportunity.expectedClose)}` : ""}</span>
                       </div>
                     ))}

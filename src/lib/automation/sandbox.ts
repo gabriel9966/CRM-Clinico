@@ -111,6 +111,7 @@ export async function runCode(code: string, ctx: SandboxContext): Promise<Sandbo
 
   const sandbox = {
     payload: ctx.payload ?? null,
+    appointment: ctx.payload && typeof ctx.payload === "object" ? (ctx.payload as { appointment?: unknown }).appointment ?? null : null,
     contact,
     opportunity,
     crm: buildCrmApi(ctx, sandboxConsole.log),

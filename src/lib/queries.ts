@@ -299,6 +299,12 @@ export async function getConversationsPage(organizationId: string, query: Conver
   });
   const hasMore = found.length > limit;
   const rows = hasMore ? found.slice(0, limit) : found;
+  const inboundTimes = rows.length ? await prisma.message.groupBy({
+    by: ["conversationId"],
+    where: { organizationId, conversationId: { in: rows.map((row) => row.id) }, direction: "in" },
+    _max: { time: true },
+  }) : [];
+  const lastInboundByConversation = new Map(inboundTimes.map((item) => [item.conversationId, item._max.time?.toISOString() ?? null]));
   if (hasMore) {
     const last = rows[rows.length - 1];
     nextCursor = encodeCursor(last.lastMessageAt!, last.id);
@@ -311,6 +317,7 @@ export async function getConversationsPage(organizationId: string, query: Conver
       lastText: conversation.lastMessageText,
       lastTime: conversation.lastMessageAt ? conversation.lastMessageAt.toISOString() : null,
       lastDirection: (conversation.lastMessageDirection as "in" | "out" | null) ?? null,
+      lastInboundAt: lastInboundByConversation.get(conversation.id) ?? null,
       status: conversation.status,
       ownerId: conversation.ownerId,
       channel: conversation.connection

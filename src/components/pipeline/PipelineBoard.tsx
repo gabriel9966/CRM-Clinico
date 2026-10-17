@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Icon } from "@/components/icons";
-import { colorFor, initials, fmtDate, fmtMoney, STAGE_COLORS } from "@/lib/format";
+import { colorFor, initials, fmtDate, fmtMoney, fmtTime, STAGE_COLORS } from "@/lib/format";
 import type { PipelineDTO, DealCardDTO, TeamMemberDTO, CustomFieldDefinitionDTO } from "@/lib/types";
 import { CustomFieldInputs, readCustomFieldValues } from "@/components/shared/CustomFieldInputs";
 import { EntityPicker } from "@/components/shared/EntityPicker";
@@ -23,6 +23,8 @@ import {
   moveOpportunityStage,
   importOpportunitiesCsv,
   configureStage,
+  getOpportunityStageHistory,
+  type OpportunityStageHistoryDTO,
 } from "@/app/pipeline/actions";
 import { fetchPipelineBoard, fetchStageCards } from "@/app/listings/actions";
 import { ImportCsvModal, type ImportColumn } from "@/components/shared/ImportCsvModal";
@@ -53,6 +55,15 @@ type Column = { count: number; sum: number; cards: DealCardDTO[]; nextCursor: st
 type Board = Record<string, Column>;
 
 const SEARCH_DEBOUNCE_MS = 300;
+
+function stageDurationLabel(ms: number) {
+  const minutes = Math.max(0, Math.floor(ms / 60_000));
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h${minutes % 60 ? ` ${minutes % 60}min` : ""}`;
+  const days = Math.floor(hours / 24);
+  return `${days}d${hours % 24 ? ` ${hours % 24}h` : ""}`;
+}
 
 export function PipelineBoard({
   pipelines,
@@ -92,11 +103,8 @@ export function PipelineBoard({
   const groups = useMemo(() => [...new Set(pipelines.map((p) => p.group))], [pipelines]);
   const currentGroup = pipeline?.group ?? groups[0] ?? "Geral";
   const groupPipelines = pipelines.filter((p) => p.group === currentGroup);
-  const lastInGroup = useRef<Record<string, string>>({});
-  if (pipeline) lastInGroup.current[pipeline.group] = pipeline.id;
-  function selectGroup(g: string) {
-    const remembered = lastInGroup.current[g];
-    const target = pipelines.find((p) => p.id === remembered && p.group === g) ?? pipelines.find((p) => p.group === g);
+  function selectGroup(group: string) {
+    const target = pipelines.find((p) => p.group === group);
     if (target) setCurrentPipelineId(target.id);
   }
   const stages = useMemo(() => (pipeline ? [...pipeline.stages].sort((a, b) => a.order - b.order) : []), [pipeline]);
@@ -106,7 +114,9 @@ export function PipelineBoard({
   const firstRun = useRef(true);
 
   useEffect(() => {
-    try { setSavedViews(JSON.parse(localStorage.getItem("novacrm-pipeline-views") || "[]")); } catch { setSavedViews([]); }
+    queueMicrotask(() => {
+      try { setSavedViews(JSON.parse(localStorage.getItem("novacrm-pipeline-views") || "[]")); } catch { setSavedViews([]); }
+    });
   }, []);
   function saveView() {
     const name = prompt("Nome da visão:");
@@ -272,40 +282,23 @@ export function PipelineBoard({
       </div>
 
       <div className="content">
-        {groups.length > 1 && (
-          <div className="pipeline-bar pipeline-groups">
-            {groups.map((g) => (
-              <div
-                key={g}
-                className={`pipeline-tab group ${g === currentGroup ? "active" : ""}`}
-                onClick={() => selectGroup(g)}
-              >
-                {g} <span className="muted">({pipelines.filter((p) => p.group === g).length})</span>
-              </div>
-            ))}
+        <nav className="pipeline-horizontal" aria-label="Seleção de pipelines">
+          <div className="pipeline-horizontal-groups">
+            {groups.map((group) => <button key={group} type="button" className={`pipeline-tab ${group === currentGroup ? "active" : ""}`} onClick={() => selectGroup(group)}>{group} <span>({pipelines.filter((p) => p.group === group).length})</span></button>)}
           </div>
-        )}
-        <div className="pipeline-bar">
-          {groupPipelines.map((p) => (
-            <div
-              key={p.id}
-              className={`pipeline-tab ${p.id === currentPipelineId ? "active" : ""}`}
-              onClick={() => setCurrentPipelineId(p.id)}
-            >
-              {p.name}
-            </div>
-          ))}
+          <div className="pipeline-horizontal-items">
+            {groupPipelines.map((item) => <button key={item.id} type="button" className={`pipeline-tab ${item.id === currentPipelineId ? "active" : ""}`} onClick={() => setCurrentPipelineId(item.id)}>{item.name}</button>)}
           <button className="btn small ghost" onClick={() => setModal({ type: "pipeline-new" })}>
             <Icon.plus /> Novo pipeline
           </button>
-          <span className="sep" />
           <button
             className="btn small"
             onClick={() => pipeline && setModal({ type: "pipeline-manage", pipelineId: pipeline.id })}
           >
             <Icon.settings /> Gerenciar etapas
           </button>
-        </div>
+          </div>
+        </nav>
 
         <div className="pipeline-bar" style={{ gap: 8 }}>
           <div className="search-bar" style={{ margin: 0, flex: 1, maxWidth: 360 }}>
@@ -552,6 +545,36 @@ function OpportunityModal({
   const activePipelineId = pendingPipelineId ?? data?.pipelineId ?? defaultPipelineId;
   const activePipeline = pipelines.find((p) => p.id === activePipelineId);
   const stages = activePipeline ? [...activePipeline.stages].sort((a, b) => a.order - b.order) : [];
+  const [historyData, setHistoryData] = useState<{ opportunityId: string; items: OpportunityStageHistoryDTO[] } | null>(null);
+  const [historyNow, setHistoryNow] = useState(0);
+  const opportunityId = data?.id;
+  const history = historyData && historyData.opportunityId === opportunityId ? historyData.items : null;
+
+  useEffect(() => {
+    if (!opportunityId) return;
+    let active = true;
+    getOpportunityStageHistory(opportunityId).then((items) => {
+      if (!active) return;
+      setHistoryData({ opportunityId, items });
+      setHistoryNow(Date.now());
+    }).catch(() => { if (active) setHistoryData({ opportunityId, items: [] }); });
+    return () => { active = false; };
+  }, [opportunityId]);
+  useEffect(() => {
+    if (!opportunityId) return;
+    const timer = window.setInterval(() => setHistoryNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, [opportunityId]);
+
+  const stageSummary = useMemo(() => {
+    const totals = new Map<string, { label: string; color: string; ms: number }>();
+    for (const item of history ?? []) {
+      const duration = Math.max(0, (item.exitedAt ? new Date(item.exitedAt).getTime() : historyNow || new Date(item.enteredAt).getTime()) - new Date(item.enteredAt).getTime());
+      const prior = totals.get(item.stageId);
+      totals.set(item.stageId, { label: item.stageLabel, color: item.stageColor, ms: (prior?.ms ?? 0) + duration });
+    }
+    return [...totals.entries()].map(([stageId, value]) => ({ stageId, ...value }));
+  }, [history, historyNow]);
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -570,6 +593,36 @@ function OpportunityModal({
                 </div>
                 <a className="btn small" href={`/contacts?contact=${data.contactId}`}>Abrir ficha</a>
               </div>
+            )}
+            {data && (
+              <section className="opportunity-history" aria-label="Histórico da oportunidade">
+                <div className="opportunity-history-head">
+                  <div><span>HISTÓRICO DO FUNIL</span><strong>Movimentações e tempo por etapa</strong></div>
+                  {history && <small>{history.length} {history.length === 1 ? "registro" : "registros"}</small>}
+                </div>
+                {history === null ? <div className="muted history-loading">Carregando histórico…</div> : history.length === 0 ? (
+                  <div className="muted history-loading">Sem histórico registrado para esta oportunidade.</div>
+                ) : (
+                  <>
+                    <div className="stage-time-summary">
+                      {stageSummary.map((item) => <div key={item.stageId}><i style={{ background: item.color }} /><span>{item.label}</span><strong>{stageDurationLabel(item.ms)}</strong></div>)}
+                    </div>
+                    <div className="stage-history-list">
+                      {history.map((item, index) => {
+                        const previous = history[index - 1];
+                        const returned = history.slice(0, index).some((prior) => prior.stageId === item.stageId);
+                        const movement = !previous ? "Criado em" : item.stageOrder < previous.stageOrder ? "Voltou para" : returned ? "Retornou para" : "Movido para";
+                        const duration = Math.max(0, (item.exitedAt ? new Date(item.exitedAt).getTime() : historyNow || new Date(item.enteredAt).getTime()) - new Date(item.enteredAt).getTime());
+                        return <div key={item.id} className={`stage-history-item ${returned ? "returned" : ""}`}>
+                          <i style={{ background: item.stageColor }} />
+                          <div><strong>{movement} {item.stageLabel}</strong><span>{fmtDate(item.enteredAt)} · {fmtTime(item.enteredAt)}{item.exitedAt ? ` → ${fmtDate(item.exitedAt)} · ${fmtTime(item.exitedAt)}` : " · etapa atual"}</span></div>
+                          <em>{stageDurationLabel(duration)}</em>
+                        </div>;
+                      })}
+                    </div>
+                  </>
+                )}
+              </section>
             )}
             <div className="field">
               <label>Título *</label>

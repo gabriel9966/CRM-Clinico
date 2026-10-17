@@ -26,6 +26,7 @@ export type ConversationRowDTO = {
   lastText: string | null;
   lastTime: string | null;
   lastDirection: "in" | "out" | null;
+  lastInboundAt: string | null;
   status: "OPEN" | "CLOSED";
   ownerId: string | null;
   channel: ConversationChannelInfo;

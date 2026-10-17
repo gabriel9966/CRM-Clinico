@@ -43,4 +43,10 @@ export const TRIGGER_LABEL: Record<string, string> = {
   WEBHOOK_RECEIVED: "Webhook recebido (HTTP externo)",
   CONTACT_INACTIVE: "Contato sem interação",
   DATE_REACHED: "Data e horário programados",
+  APPOINTMENT_CREATED: "Agendamento criado",
+  APPOINTMENT_RESCHEDULED: "Agendamento reagendado",
+  APPOINTMENT_CANCELLED: "Agendamento cancelado",
+  APPOINTMENT_CONFIRMED: "Agendamento confirmado",
+  APPOINTMENT_NO_SHOW: "Cliente não compareceu",
+  APPOINTMENT_STARTING: "Agendamento vai começar",
 };

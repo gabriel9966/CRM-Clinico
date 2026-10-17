@@ -10,7 +10,19 @@ type RunContext = {
   organizationId: string;
   contactId?: string | null;
   opportunityId?: string | null;
+  appointmentId?: string | null;
   payload?: unknown;
+};
+
+type AppointmentTriggerContext = {
+  id: string;
+  contactId: string | null;
+  ownerId: string | null;
+  professionalId: string | null;
+  procedureId: string | null;
+  bookingChannel: string | null;
+  startAt: Date | string;
+  status: string;
 };
 
 function parseFlow(raw: string): Flow {
@@ -311,6 +323,8 @@ export async function triggerAutomations(
   ctx: {
     contactId?: string | null;
     opportunityId?: string | null;
+    appointmentId?: string | null;
+    appointment?: AppointmentTriggerContext;
     payload?: unknown;
     pipelineId?: string;
     stageId?: string;
@@ -319,7 +333,12 @@ export async function triggerAutomations(
     onlyAutomationId?: string;
   }
 ) {
-  const automations = await prisma.automation.findMany({ where: { organizationId, trigger: trigger as never, enabled: true } });
+  // O cliente Prisma sempre devolve um array; a proteção também permite que
+  // integrações opcionais não interrompam o evento caso a consulta falhe em um
+  // adaptador de teste.
+  const automations = (await prisma.automation.findMany({
+    where: { organizationId, trigger: trigger as never, enabled: true },
+  })) ?? [];
 
   for (const automation of automations) {
     if (ctx.onlyAutomationId && automation.id !== ctx.onlyAutomationId) continue;
@@ -335,6 +354,12 @@ export async function triggerAutomations(
       if (config.stageId && config.stageId !== ctx.stageId) continue;
     }
     if (trigger === "TAG_ADDED" && config.tag && config.tag !== ctx.tag) continue;
+    if (trigger.startsWith("APPOINTMENT_") && ctx.appointment) {
+      if (config.ownerId && config.ownerId !== ctx.appointment.ownerId) continue;
+      if (config.professionalId && config.professionalId !== ctx.appointment.professionalId) continue;
+      if (config.procedureId && config.procedureId !== ctx.appointment.procedureId) continue;
+      if (config.bookingChannel && config.bookingChannel !== ctx.appointment.bookingChannel) continue;
+    }
 
     const flow = parseFlow(automation.flow);
     const triggerNode = flow.nodes.find((n) => n.data.kind === "trigger");
@@ -342,23 +367,51 @@ export async function triggerAutomations(
     const firstEdge = outgoingEdge(flow, triggerNode.id);
     if (!firstEdge) continue;
 
-    const run = await prisma.automationRun.create({
-      data: {
-        automationId: automation.id,
-        contactId: ctx.contactId ?? null,
-        opportunityId: ctx.opportunityId ?? null,
-        payload: ctx.payload !== undefined ? JSON.stringify(ctx.payload) : null,
-        status: "RUNNING",
-      },
-    });
+    let run;
+    try {
+      run = await prisma.automationRun.create({
+        data: {
+          automationId: automation.id,
+          contactId: ctx.contactId ?? null,
+          opportunityId: ctx.opportunityId ?? null,
+          appointmentId: ctx.appointmentId ?? null,
+          payload: ctx.payload !== undefined ? JSON.stringify(ctx.payload) : null,
+          status: "RUNNING",
+        },
+      });
+    } catch (error) {
+      // O agendador pode passar pelo mesmo minuto duas vezes; a restrição única
+      // por automação/agendamento evita envio duplicado de lembrete.
+      if (ctx.appointmentId && typeof error === "object" && error && (error as { code?: string }).code === "P2002") continue;
+      throw error;
+    }
 
     await executeWithFailureTracking(flow, run.id, firstEdge.target, {
       organizationId,
       contactId: ctx.contactId,
       opportunityId: ctx.opportunityId,
+      appointmentId: ctx.appointmentId,
       payload: ctx.payload,
     });
   }
+}
+
+/** Porta única dos eventos da agenda. O payload chega completo ao fluxo como
+ * `payload.appointment`, enquanto o contato vinculado fica disponível às ações
+ * usuais (mensagem, tarefa, tags e negócio). */
+export async function triggerAppointmentAutomations(
+  organizationId: string,
+  trigger: "APPOINTMENT_CREATED" | "APPOINTMENT_RESCHEDULED" | "APPOINTMENT_CANCELLED" | "APPOINTMENT_CONFIRMED" | "APPOINTMENT_NO_SHOW" | "APPOINTMENT_STARTING",
+  appointment: AppointmentTriggerContext,
+  onlyAutomationId?: string
+) {
+  await triggerAutomations(organizationId, trigger, {
+    contactId: appointment.contactId,
+    appointmentId: appointment.id,
+    appointment,
+    payload: { appointment: { ...appointment, startAt: new Date(appointment.startAt).toISOString() } },
+    onlyAutomationId,
+  });
 }
 
 // Dispara uma automação específica pelo id (usado pelo gatilho de webhook,
@@ -400,6 +453,7 @@ export async function runAutomationById(automationId: string, payload: unknown) 
       payload: JSON.stringify(payload),
       contactId: contactId ?? null,
       opportunityId: opportunityId ?? null,
+      appointmentId: null,
       status: "RUNNING",
     },
   });
@@ -433,6 +487,7 @@ export async function resumeAutomationRun(runId: string) {
     organizationId: run.automation.organizationId,
     contactId: run.contactId,
     opportunityId: run.opportunityId,
+    appointmentId: run.appointmentId,
     payload,
   });
 }
@@ -501,5 +556,32 @@ export async function processDueTriggerAutomations() {
       });
     }
     await prisma.automation.update({ where: { id: automation.id }, data: { lastTriggeredAt: now } });
+  }
+
+  // Lembretes ligados ao começo do agendamento. A execução fica vinculada ao
+  // id do agendamento, por isso cada regra só dispara uma vez para ele mesmo
+  // que este processo rode a cada minuto ou o servidor reinicie.
+  const appointmentAutomations = await prisma.automation.findMany({
+    where: { enabled: true, trigger: "APPOINTMENT_STARTING" },
+    select: { id: true, organizationId: true, triggerConfig: true },
+  });
+  for (const automation of appointmentAutomations) {
+    let config: Record<string, unknown> = {};
+    try { config = JSON.parse(automation.triggerConfig); } catch { config = {}; }
+    const minutesBefore = Math.max(1, Math.min(7 * 24 * 60, Number(config.minutesBefore ?? 60) || 60));
+    const until = new Date(now.getTime() + minutesBefore * 60_000);
+    const appointments = await prisma.appointment.findMany({
+      where: {
+        organizationId: automation.organizationId,
+        deletedAt: null,
+        status: { in: ["SCHEDULED", "CONFIRMED"] },
+        startAt: { gte: now, lte: until },
+      },
+      select: { id: true, contactId: true, ownerId: true, professionalId: true, procedureId: true, bookingChannel: true, startAt: true, status: true },
+      take: 500,
+    });
+    for (const appointment of appointments) {
+      await triggerAppointmentAutomations(automation.organizationId, "APPOINTMENT_STARTING", appointment, automation.id);
+    }
   }
 }

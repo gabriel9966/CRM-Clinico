@@ -12,7 +12,7 @@ vi.mock("@/lib/mcp-tools", () => ({
 }));
 vi.mock("../sandbox", () => ({ runCode: vi.fn().mockResolvedValue({ ok: true }) }));
 
-const { runAutomationById } = await import("../engine");
+const { runAutomationById, triggerAppointmentAutomations } = await import("../engine");
 const { mcpCreateContact, mcpCreateOpportunity } = await import("@/lib/mcp-tools");
 
 const ORG_A = "org-a";
@@ -32,6 +32,62 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockPrisma.automationRun.create.mockResolvedValue({ id: "run-1" });
   mockPrisma.automationRun.update.mockResolvedValue({});
+});
+
+describe("triggerAppointmentAutomations", () => {
+  const appointment = {
+    id: "appointment-1",
+    contactId: "contact-1",
+    ownerId: "owner-1",
+    professionalId: "professional-1",
+    procedureId: "procedure-1",
+    bookingChannel: "WhatsApp",
+    startAt: new Date("2026-10-20T14:00:00.000Z"),
+    status: "SCHEDULED",
+  };
+
+  it("inicia o fluxo do agendamento e registra o id para impedir reenvio", async () => {
+    mockPrisma.automation.findMany.mockResolvedValue([
+      {
+        id: "auto-appointment",
+        organizationId: ORG_A,
+        trigger: "APPOINTMENT_CREATED",
+        triggerConfig: "{}",
+        flow: JSON.stringify(flowWith({ kind: "action", actionType: "send_message", config: { text: "Lembrete" } })),
+      },
+    ]);
+
+    await triggerAppointmentAutomations(ORG_A, "APPOINTMENT_CREATED", appointment);
+
+    expect(mockPrisma.automationRun.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          automationId: "auto-appointment",
+          appointmentId: "appointment-1",
+          contactId: "contact-1",
+        }),
+      })
+    );
+    expect(mockPrisma.automationRun.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "COMPLETED" }) })
+    );
+  });
+
+  it("respeita o filtro opcional de responsavel do agendamento", async () => {
+    mockPrisma.automation.findMany.mockResolvedValue([
+      {
+        id: "auto-other-owner",
+        organizationId: ORG_A,
+        trigger: "APPOINTMENT_CREATED",
+        triggerConfig: JSON.stringify({ ownerId: "owner-2" }),
+        flow: JSON.stringify(flowWith({ kind: "action", actionType: "send_message", config: { text: "Lembrete" } })),
+      },
+    ]);
+
+    await triggerAppointmentAutomations(ORG_A, "APPOINTMENT_CREATED", appointment);
+
+    expect(mockPrisma.automationRun.create).not.toHaveBeenCalled();
+  });
 });
 
 describe("runAutomationById: validações básicas", () => {

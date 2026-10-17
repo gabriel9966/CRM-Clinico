@@ -42,6 +42,28 @@ export async function fetchConversationSendOptions(conversationId: string): Prom
   return (await getSendOptions(user.organizationId, conversation.contactId)).filter((option) => option.connectionId === conversation.connectionId);
 }
 
+export type PrivateNoteDTO = { id: string; text: string; createdAt: string };
+
+export async function fetchPrivateNotes(conversationId: string): Promise<PrivateNoteDTO[]> {
+  const user = await requireOrgUser();
+  if (!(await getConversationForUser(user, conversationId))) return [];
+  const notes = await prisma.conversationPrivateNote.findMany({
+    where: { organizationId: user.organizationId, conversationId, authorId: user.id },
+    orderBy: { createdAt: "desc" }, take: 100,
+    select: { id: true, text: true, createdAt: true },
+  });
+  return notes.reverse().map((note) => ({ ...note, createdAt: note.createdAt.toISOString() }));
+}
+
+export async function addPrivateNote(conversationId: string, rawText: string) {
+  const user = await requireOrgUser();
+  if (!(await getConversationForUser(user, conversationId))) return { ok: false as const, error: "Atendimento não disponível." };
+  const text = rawText.trim();
+  if (!text || text.length > 4000) return { ok: false as const, error: "Escreva uma nota de até 4.000 caracteres." };
+  const note = await prisma.conversationPrivateNote.create({ data: { organizationId: user.organizationId, conversationId, authorId: user.id, text } });
+  return { ok: true as const, note: { id: note.id, text: note.text, createdAt: note.createdAt.toISOString() } };
+}
+
 export async function sendMessage(conversationId: string, text: string): Promise<SendOutcome> {
   const user = await requireOrgUser();
   const conversation = await getConversationForUser(user, conversationId);

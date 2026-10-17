@@ -23,7 +23,8 @@ export type SendErrorCode =
   | "canal_desconectado"
   | "canal_invalido"
   | "escolha_canal"
-  | "canal_em_uso";
+  | "canal_em_uso"
+  | "janela_24h_encerrada";
 
 export type SendResult =
   | { ok: true; status: "sent" | "failed"; messageId: string; connectionId: string; error?: string }
@@ -38,6 +39,7 @@ const MESSAGES: Record<SendErrorCode, string> = {
   canal_invalido: "Esse canal não pode ser usado para este contato.",
   escolha_canal: "Este contato pode ser atendido por mais de um canal. Escolha por qual enviar.",
   canal_em_uso: "Este telefone/e-mail já pertence a outro contato nesse canal.",
+  janela_24h_encerrada: "A janela de atendimento da API oficial terminou. Envie um template aprovado pela Meta para iniciar uma nova conversa; mensagens livres só podem ser enviadas até 24 horas após a última mensagem do cliente.",
 };
 
 const fail = (code: SendErrorCode, extra?: string): SendResult => ({
@@ -166,6 +168,16 @@ export async function sendContactMessage(
     } else {
       return fail(options.length > 0 ? "canal_desconectado" : "sem_canal");
     }
+  }
+
+  // Aplicado no serviço central para cobrir chat, automações, MCP e reenvios.
+  if (chosen.provider === "WHATSAPP_CLOUD") {
+    const lastInbound = await prisma.message.findFirst({
+      where: { organizationId, contactId, connectionId: chosen.connectionId, direction: "in" },
+      orderBy: { time: "desc" },
+      select: { time: true },
+    });
+    if (!lastInbound || Date.now() - lastInbound.time.getTime() >= 24 * 60 * 60 * 1000) return fail("janela_24h_encerrada");
   }
 
   // Primeira conversa por este canal: registra o vínculo contato ↔ canal.
