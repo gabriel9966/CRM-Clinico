@@ -17,6 +17,8 @@ export type ContactInput = {
   phone: string;
   tags: string[];
   notes: string;
+  source?: string;
+  score?: number;
   ownerId: string | null;
   customFields?: Record<string, unknown>;
 };
@@ -41,6 +43,8 @@ export async function createContact(data: ContactInput) {
       phone: data.phone || null,
       tags: JSON.stringify(data.tags),
       notes: data.notes || null,
+      source: data.source?.trim() || null,
+      score: Math.max(0, Math.min(100, Math.trunc(Number(data.score) || 0))),
       ownerId: data.ownerId,
       customFields: (data.customFields ?? {}) as Prisma.InputJsonValue,
     },
@@ -69,6 +73,8 @@ export async function updateContact(id: string, data: ContactInput) {
       phone: data.phone || null,
       tags: JSON.stringify(data.tags),
       notes: data.notes || null,
+      source: data.source?.trim() || null,
+      score: Math.max(0, Math.min(100, Math.trunc(Number(data.score) || 0))),
       ownerId: data.ownerId,
       customFields: (data.customFields ?? {}) as Prisma.InputJsonValue,
     },

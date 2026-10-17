@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { requireAdminUser } from "@/lib/auth";
 import type { Flow } from "@/lib/automation/types";
 import { TRIGGER_LABEL } from "@/lib/automation/types";
+import { actorOf, audit } from "@/lib/audit";
 
 function initialFlow(triggerLabel: string): Flow {
   return {
@@ -22,7 +23,8 @@ function initialFlow(triggerLabel: string): Flow {
 }
 
 export async function createAutomation(name: string, trigger: string) {
-  const { organizationId } = await requireAdminUser();
+  const user = await requireAdminUser();
+  const { organizationId } = user;
   const automation = await prisma.automation.create({
     data: {
       organizationId,
@@ -31,6 +33,7 @@ export async function createAutomation(name: string, trigger: string) {
       flow: JSON.stringify(initialFlow(trigger)),
     },
   });
+  await audit(organizationId, { action: "automation.created", entity: "Automation", entityId: automation.id, ...actorOf(user), meta: { trigger } });
   revalidatePath("/automations");
   redirect(`/automations/${automation.id}`);
 }
@@ -105,25 +108,33 @@ export async function renameAutomation(id: string, name: string) {
 }
 
 export async function toggleAutomation(id: string, enabled: boolean) {
-  const { organizationId } = await requireAdminUser();
-  await prisma.automation.updateMany({ where: { id, organizationId }, data: { enabled } });
+  const user = await requireAdminUser();
+  const { organizationId } = user;
+  const updated = await prisma.automation.updateMany({ where: { id, organizationId }, data: { enabled } });
+  if (updated.count) await audit(organizationId, { action: enabled ? "automation.enabled" : "automation.disabled", entity: "Automation", entityId: id, ...actorOf(user) });
   revalidatePath("/automations");
 }
 
 export async function updateTriggerConfig(id: string, triggerConfig: Record<string, unknown>) {
-  const { organizationId } = await requireAdminUser();
-  await prisma.automation.updateMany({ where: { id, organizationId }, data: { triggerConfig: JSON.stringify(triggerConfig) } });
+  const user = await requireAdminUser();
+  const { organizationId } = user;
+  const updated = await prisma.automation.updateMany({ where: { id, organizationId }, data: { triggerConfig: JSON.stringify(triggerConfig) } });
+  if (updated.count) await audit(organizationId, { action: "automation.trigger_configured", entity: "Automation", entityId: id, ...actorOf(user) });
   revalidatePath(`/automations/${id}`);
 }
 
 export async function saveFlow(id: string, flow: Flow) {
-  const { organizationId } = await requireAdminUser();
-  await prisma.automation.updateMany({ where: { id, organizationId }, data: { flow: JSON.stringify(flow) } });
+  const user = await requireAdminUser();
+  const { organizationId } = user;
+  const updated = await prisma.automation.updateMany({ where: { id, organizationId }, data: { flow: JSON.stringify(flow) } });
+  if (updated.count) await audit(organizationId, { action: "automation.flow_saved", entity: "Automation", entityId: id, ...actorOf(user), meta: { nodes: flow.nodes.length, edges: flow.edges.length } });
   revalidatePath(`/automations/${id}`);
 }
 
 export async function deleteAutomation(id: string) {
-  const { organizationId } = await requireAdminUser();
-  await prisma.automation.deleteMany({ where: { id, organizationId } });
+  const user = await requireAdminUser();
+  const { organizationId } = user;
+  const deleted = await prisma.automation.deleteMany({ where: { id, organizationId } });
+  if (deleted.count) await audit(organizationId, { action: "automation.deleted", entity: "Automation", entityId: id, ...actorOf(user) });
   revalidatePath("/automations");
 }

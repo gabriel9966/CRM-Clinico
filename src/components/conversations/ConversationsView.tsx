@@ -19,7 +19,7 @@ import type {
   SendOptionDTO,
   TeamMemberDTO,
 } from "@/lib/types";
-import { assignConversation, fetchConversationEvents, fetchConversationSendOptions, sendMessage, setConversationStatus, updateConversationTags } from "@/app/conversations/actions";
+import { assignConversation, fetchConversationEvents, fetchConversationSendOptions, retryFailedMessage, sendMessage, setConversationStatus, updateConversationTags } from "@/app/conversations/actions";
 import { fetchContactDetail, fetchConversationThread, fetchConversations } from "@/app/listings/actions";
 import { createMessageTemplate, deleteMessageTemplate } from "@/app/templates/actions";
 import { createActivity, type ActivityInput } from "@/app/activities/actions";
@@ -339,6 +339,20 @@ export function ConversationsView({
     }
   }
 
+  async function retryMessage(messageId: string) {
+    if (!selectedId) return;
+    setSending(true);
+    setSendError(null);
+    try {
+      const result = await retryFailedMessage(selectedId, messageId);
+      if (!result.ok) setSendError(result.error);
+      else if (result.status === "failed") setSendError(result.error || "O canal recusou novamente o envio.");
+      await refreshNow();
+    } finally {
+      setSending(false);
+    }
+  }
+
   // Canais prontos para enviar agora (conectados). Se houver mais de um, o
   // atendente escolhe; se não houver nenhum, o envio fica bloqueado.
   const usableChannels = sendOptions.filter((o) => o.connected);
@@ -510,6 +524,7 @@ export function ConversationsView({
                         <div className="bubble">
                           {m.text}
                           <span className="time">{fmtTime(m.time)}</span>
+                          {m.status === "failed" && <button type="button" className="btn small" disabled={sending || activeRow?.status === "CLOSED"} onClick={() => retryMessage(m.id)}>Tentar novamente</button>}
                           {m.status === "failed" && (
                             <span style={{ display: "block", fontSize: 11, fontWeight: 700, color: "#fecaca", marginTop: 2 }}>
                               ⚠ Não foi entregue — o canal recusou o envio

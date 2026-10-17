@@ -6,6 +6,8 @@ export type ContactDTO = {
   phone: string | null;
   tags: string[];
   notes: string | null;
+  source: string | null;
+  score: number;
   ownerId: string | null;
   customFields: Record<string, unknown>;
   createdAt: string;
@@ -163,6 +165,18 @@ export type AutomationDTO = {
   runCount: number;
 };
 
+export type AutomationRunDTO = {
+  id: string;
+  automationId: string;
+  automationName: string;
+  status: "RUNNING" | "WAITING" | "COMPLETED" | "FAILED";
+  contactId: string | null;
+  opportunityId: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  detail: string | null;
+};
+
 export type ConnectionDTO = {
   id: string;
   provider: "WHATSAPP_EVOLUTION" | "WHATSAPP_AZAP" | "WHATSAPP_CLOUD" | "INSTAGRAM" | "EMAIL";
@@ -179,6 +193,7 @@ export type TeamMemberDTO = {
   color: string;
   team: string;
   role: "ADMIN" | "MEMBER";
+  permissions: string[];
   isActive: boolean;
 };
 
@@ -235,6 +250,9 @@ export type CampaignDTO = {
   batchSize: number;
   intervalMinutes: number;
   duplicateWindowHours: number;
+  dailyLimit: number;
+  sendWindowStart: number;
+  sendWindowEnd: number;
   metrics: { total: number; pending: number; sent: number; delivered: number; read: number; responded: number; failed: number; skipped: number; conversions: number };
   recipients: Array<{ id: string; contactId: string; contactName: string; status: string; failureReason: string | null; sentAt: string | null; optedOut: boolean }>;
 };

@@ -69,3 +69,33 @@ export async function createMessage(db: DbClient, data: Prisma.MessageUncheckedC
   });
   return message;
 }
+
+/**
+ * Variante para entradas de webhook. Gateways repetem eventos em timeout e
+ * alguns enviam o mesmo lote mais de uma vez; com o id do provedor a criação
+ * fica idempotente e o chamador sabe se deve (ou não) rodar automações.
+ */
+export async function createInboundMessage(db: DbClient, data: Prisma.MessageUncheckedCreateInput) {
+  if (!data.connectionId || !data.externalMessageId) {
+    return { message: await createMessage(db, data), duplicate: false };
+  }
+
+  const existing = await db.message.findFirst({
+    where: { connectionId: data.connectionId, externalMessageId: data.externalMessageId },
+  });
+  if (existing) return { message: existing, duplicate: true };
+
+  try {
+    return { message: await createMessage(db, data), duplicate: false };
+  } catch (error) {
+    // Defesa contra concorrência: duas entregas idênticas podem passar pela
+    // consulta acima ao mesmo tempo; o índice único decide a vencedora.
+    if (typeof error === "object" && error && (error as { code?: string }).code === "P2002") {
+      const duplicate = await db.message.findFirst({
+        where: { connectionId: data.connectionId, externalMessageId: data.externalMessageId },
+      });
+      if (duplicate) return { message: duplicate, duplicate: true };
+    }
+    throw error;
+  }
+}

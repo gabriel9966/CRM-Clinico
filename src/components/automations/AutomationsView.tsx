@@ -4,11 +4,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Icon } from "@/components/icons";
-import type { AutomationDTO } from "@/lib/types";
+import type { AutomationDTO, AutomationRunDTO } from "@/lib/types";
 import { TRIGGER_LABEL } from "@/lib/automation/types";
 import { createAutomation, createAutomationRecipe, createQuickReply, toggleAutomation, deleteAutomation } from "@/app/automations/actions";
 
-export function AutomationsView({ automations }: { automations: AutomationDTO[] }) {
+export function AutomationsView({ automations, runs }: { automations: AutomationDTO[]; runs: AutomationRunDTO[] }) {
   const router = useRouter();
   const [modalOpen, setModalOpen] = useState(false);
   const [quickReplyOpen, setQuickReplyOpen] = useState(false);
@@ -93,6 +93,40 @@ export function AutomationsView({ automations }: { automations: AutomationDTO[] 
             </table>
           </div>
         )}
+
+        <section style={{ marginTop: 28 }} aria-label="Histórico de execuções">
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 10 }}>
+            <div>
+              <h2 style={{ fontSize: 18, margin: 0 }}>Histórico de execuções</h2>
+              <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>Sucessos, esperas e falhas das últimas 80 execuções.</p>
+            </div>
+            <span className="muted" style={{ fontSize: 12 }}>{runs.filter((r) => r.status === "FAILED").length} falha(s)</span>
+          </div>
+          {runs.length === 0 ? (
+            <div className="empty-state" style={{ padding: 24 }}>As execuções aparecerão aqui assim que uma automação for acionada.</div>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Automação</th><th>Status</th><th>Contexto</th><th>Detalhe</th><th>Início</th></tr></thead>
+                <tbody>
+                  {runs.map((run) => (
+                    <tr key={run.id}>
+                      <td><Link href={`/automations/${run.automationId}`}>{run.automationName}</Link></td>
+                      <td>
+                        <span className={run.status === "FAILED" ? "badge red" : run.status === "COMPLETED" ? "badge green" : "badge"}>
+                          {run.status === "FAILED" ? "Falhou" : run.status === "COMPLETED" ? "Concluída" : run.status === "WAITING" ? "Em espera" : "Executando"}
+                        </span>
+                      </td>
+                      <td className="muted">{run.contactId ? "Contato" : run.opportunityId ? "Negócio" : "Sem registro"}</td>
+                      <td className="muted" style={{ maxWidth: 260 }}>{run.detail ?? "—"}</td>
+                      <td className="muted">{new Date(run.startedAt).toLocaleString("pt-BR")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
       </div>
 
       {modalOpen && <NewAutomationModal onClose={() => setModalOpen(false)} />}

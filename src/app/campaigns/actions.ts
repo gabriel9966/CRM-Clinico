@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireAdminUser } from "@/lib/auth";
 import { prepareCampaignRecipients, processCampaignNow } from "@/lib/campaigns";
+import { actorOf, audit } from "@/lib/audit";
 
 export type CreateCampaignState = { error?: string; campaignId?: string; recipients?: number };
 
@@ -13,7 +14,8 @@ function positive(value: FormDataEntryValue | null, fallback: number, min: numbe
 }
 
 export async function createCampaign(_prev: CreateCampaignState, form: FormData): Promise<CreateCampaignState> {
-  const { organizationId } = await requireAdminUser();
+  const user = await requireAdminUser();
+  const { organizationId } = user;
   const name = String(form.get("name") || "").trim();
   const body = String(form.get("body") || "").trim();
   const connectionId = String(form.get("connectionId") || "");
@@ -46,6 +48,9 @@ export async function createCampaign(_prev: CreateCampaignState, form: FormData)
       batchSize: positive(form.get("batchSize"), 25, 1, 500),
       intervalMinutes: positive(form.get("intervalMinutes"), 1, 1, 1440),
       duplicateWindowHours: positive(form.get("duplicateWindowHours"), 24, 0, 24 * 365),
+      dailyLimit: positive(form.get("dailyLimit"), 0, 0, 100_000),
+      sendWindowStart: positive(form.get("sendWindowStart"), 8, 0, 23),
+      sendWindowEnd: positive(form.get("sendWindowEnd"), 20, 1, 24),
       status: scheduledAt ? "SCHEDULED" : "RUNNING",
       scheduledAt,
       startedAt: scheduledAt ? null : new Date(),
@@ -54,26 +59,33 @@ export async function createCampaign(_prev: CreateCampaignState, form: FormData)
   });
   const recipients = await prepareCampaignRecipients(campaign.id);
   if (!scheduledAt) await processCampaignNow(organizationId, campaign.id);
+  await audit(organizationId, { action: "campaign.created", entity: "Campaign", entityId: campaign.id, ...actorOf(user), meta: { connectionId, recipients, scheduledAt: scheduledAt?.toISOString() ?? null } });
   revalidatePath("/campaigns");
   return { campaignId: campaign.id, recipients };
 }
 
 export async function pauseCampaign(id: string) {
-  const { organizationId } = await requireAdminUser();
-  await prisma.campaign.updateMany({ where: { id, organizationId, status: { in: ["RUNNING", "SCHEDULED"] } }, data: { status: "PAUSED", pausedAt: new Date(), nextRunAt: null } });
+  const user = await requireAdminUser();
+  const { organizationId } = user;
+  const updated = await prisma.campaign.updateMany({ where: { id, organizationId, status: { in: ["RUNNING", "SCHEDULED"] } }, data: { status: "PAUSED", pausedAt: new Date(), nextRunAt: null } });
+  if (updated.count) await audit(organizationId, { action: "campaign.paused", entity: "Campaign", entityId: id, ...actorOf(user) });
   revalidatePath("/campaigns");
 }
 
 export async function resumeCampaign(id: string) {
-  const { organizationId } = await requireAdminUser();
+  const user = await requireAdminUser();
+  const { organizationId } = user;
   const updated = await prisma.campaign.updateMany({ where: { id, organizationId, status: "PAUSED" }, data: { status: "RUNNING", pausedAt: null, nextRunAt: new Date() } });
   if (updated.count) await processCampaignNow(organizationId, id);
+  if (updated.count) await audit(organizationId, { action: "campaign.resumed", entity: "Campaign", entityId: id, ...actorOf(user) });
   revalidatePath("/campaigns");
 }
 
 export async function cancelCampaign(id: string) {
-  const { organizationId } = await requireAdminUser();
-  await prisma.campaign.updateMany({ where: { id, organizationId, status: { in: ["DRAFT", "SCHEDULED", "RUNNING", "PAUSED"] } }, data: { status: "CANCELLED", nextRunAt: null } });
+  const user = await requireAdminUser();
+  const { organizationId } = user;
+  const updated = await prisma.campaign.updateMany({ where: { id, organizationId, status: { in: ["DRAFT", "SCHEDULED", "RUNNING", "PAUSED"] } }, data: { status: "CANCELLED", nextRunAt: null } });
+  if (updated.count) await audit(organizationId, { action: "campaign.cancelled", entity: "Campaign", entityId: id, ...actorOf(user) });
   revalidatePath("/campaigns");
 }
 

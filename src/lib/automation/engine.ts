@@ -215,6 +215,19 @@ async function executeFrom(flow: Flow, runId: string, startNodeId: string, ctx: 
   await prisma.automationRun.update({ where: { id: runId }, data: { status: "COMPLETED", finishedAt: new Date() } });
 }
 
+/** Nunca deixa uma execução presa em "executando". O erro fica registrado no
+ * próprio histórico da automação e não interrompe o webhook ou a operação do
+ * CRM que a disparou. */
+async function executeWithFailureTracking(flow: Flow, runId: string, startNodeId: string, ctx: RunContext) {
+  try {
+    await executeFrom(flow, runId, startNodeId, ctx);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "erro desconhecido";
+    await appendLog(runId, { label: "Falha da execução", result: { ok: false, reason } });
+    await prisma.automationRun.update({ where: { id: runId }, data: { status: "FAILED", finishedAt: new Date() } });
+  }
+}
+
 export async function triggerAutomations(
   organizationId: string,
   trigger: string,
@@ -262,18 +275,12 @@ export async function triggerAutomations(
       },
     });
 
-    try {
-      await executeFrom(flow, run.id, firstEdge.target, {
-        organizationId,
-        contactId: ctx.contactId,
-        opportunityId: ctx.opportunityId,
-        payload: ctx.payload,
-      });
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : "erro desconhecido";
-      await appendLog(run.id, { label: "Falha da execução", result: { ok: false, reason } });
-      await prisma.automationRun.update({ where: { id: run.id }, data: { status: "FAILED", finishedAt: new Date() } });
-    }
+    await executeWithFailureTracking(flow, run.id, firstEdge.target, {
+      organizationId,
+      contactId: ctx.contactId,
+      opportunityId: ctx.opportunityId,
+      payload: ctx.payload,
+    });
   }
 }
 
@@ -320,7 +327,7 @@ export async function runAutomationById(automationId: string, payload: unknown) 
     },
   });
 
-  await executeFrom(flow, run.id, firstEdge.target, { organizationId: automation.organizationId, payload, contactId, opportunityId });
+  await executeWithFailureTracking(flow, run.id, firstEdge.target, { organizationId: automation.organizationId, payload, contactId, opportunityId });
   return { ok: true, runId: run.id };
 }
 
@@ -345,7 +352,7 @@ export async function resumeAutomationRun(runId: string) {
   } catch {
     payload = undefined;
   }
-  await executeFrom(flow, run.id, edge.target, {
+  await executeWithFailureTracking(flow, run.id, edge.target, {
     organizationId: run.automation.organizationId,
     contactId: run.contactId,
     opportunityId: run.opportunityId,

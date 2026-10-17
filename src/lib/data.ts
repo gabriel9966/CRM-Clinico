@@ -5,6 +5,7 @@ import type {
   TeamMemberDTO,
   ConnectionDTO,
   AutomationDTO,
+  AutomationRunDTO,
   CustomFieldDefinitionDTO,
   DuplicateContactGroupDTO,
   SegmentDTO,
@@ -97,6 +98,8 @@ export async function findDuplicateContacts(
         phone: c.phone,
         tags: parseTags(c.tags),
         notes: c.notes,
+        source: c.source,
+        score: c.score,
         ownerId: c.ownerId,
         customFields: (c.customFields as Record<string, unknown>) ?? {},
         createdAt: c.createdAt.toISOString(),
@@ -191,6 +194,41 @@ export async function getAutomations(organizationId: string): Promise<Automation
   });
 }
 
+/** Últimas execuções de automações da organização, incluindo falhas e o
+ * último evento gravado pelo motor. Mantemos o log completo no banco; a lista
+ * mostra só o resumo para ser consultável rapidamente. */
+export async function getAutomationRuns(organizationId: string): Promise<AutomationRunDTO[]> {
+  const rows = await prisma.automationRun.findMany({
+    where: { automation: { organizationId } },
+    include: { automation: { select: { id: true, name: true } } },
+    orderBy: { startedAt: "desc" },
+    take: 80,
+  });
+
+  return rows.map((run) => {
+    let detail: string | null = null;
+    try {
+      const entries = JSON.parse(run.log) as Array<{ label?: unknown; result?: { reason?: unknown } }>;
+      const last = entries.at(-1);
+      if (last?.result?.reason) detail = String(last.result.reason);
+      else if (last?.label) detail = String(last.label);
+    } catch {
+      // Um log antigo malformado não pode impedir a consulta do histórico.
+    }
+    return {
+      id: run.id,
+      automationId: run.automation.id,
+      automationName: run.automation.name,
+      status: run.status,
+      contactId: run.contactId,
+      opportunityId: run.opportunityId,
+      startedAt: run.startedAt.toISOString(),
+      finishedAt: run.finishedAt?.toISOString() ?? null,
+      detail,
+    };
+  });
+}
+
 export async function getAutomation(id: string, organizationId: string): Promise<AutomationDTO | null> {
   const a = await prisma.automation.findFirst({ where: { id, organizationId }, include: { _count: { select: { runs: true } } } });
   if (!a) return null;
@@ -229,6 +267,7 @@ export async function getTeamMembers(organizationId: string): Promise<TeamMember
     color: u.color,
     team: u.team,
     role: u.role,
+    permissions: (() => { try { const value = JSON.parse(u.permissions); return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []; } catch { return []; } })(),
     isActive: u.isActive,
   }));
 }

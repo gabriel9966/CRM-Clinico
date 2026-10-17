@@ -70,7 +70,12 @@ export function Sidebar({
   return (
     <div className="sidebar">
       <div className="brand">
-        <span className="dot" /> NovaCRM
+        <span className="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 28 28" fill="none">
+            <path d="M7 20V8l14 12V8" stroke="currentColor" strokeWidth="2.7" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </span>
+        <span className="brand-name">NovaCRM</span>
       </div>
       <div className="org-badge">{orgName}</div>
       <div style={{ padding: "0 12px 8px" }}>
@@ -84,8 +89,8 @@ export function Sidebar({
               const active = pathname.startsWith(item.href);
               const ItemIcon = item.icon;
               return (
-                <Link key={item.href} href={item.href} className={`nav-item ${active ? "active" : ""}`}>
-                  <ItemIcon /> {item.label}
+                <Link key={item.href} href={item.href} aria-label={item.label} title={item.label} className={`nav-item ${active ? "active" : ""}`}>
+                  <ItemIcon /> <span className="nav-label">{item.label}</span>
                 </Link>
               );
             })}
@@ -94,8 +99,8 @@ export function Sidebar({
         {isSuperAdmin && (
           <div>
             <div className="nav-section-label">Plataforma</div>
-            <Link href="/admin" className="nav-item">
-              <Icon.team /> Painel da Plataforma
+            <Link href="/admin" aria-label="Painel da Plataforma" title="Painel da Plataforma" className="nav-item">
+              <Icon.team /> <span className="nav-label">Painel da Plataforma</span>
             </Link>
           </div>
         )}
@@ -105,7 +110,7 @@ export function Sidebar({
         <span className="avatar" style={{ background: userColor, width: 26, height: 26, fontSize: 11 }}>
           {initials(userName)}
         </span>
-        <span style={{ flex: 1, fontSize: 12, fontWeight: 600, color: "#d7d9e3" }}>{userName}</span>
+        <span style={{ flex: 1, fontSize: 12, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{userName}</span>
         <form action={logoutAction}>
           <button type="submit">Sair</button>
         </form>

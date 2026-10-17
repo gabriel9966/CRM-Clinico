@@ -182,6 +182,8 @@ export function ContactsView({
       phone: String(fd.get("phone") || ""),
       tags,
       notes: String(fd.get("notes") || ""),
+      source: String(fd.get("source") || ""),
+      score: Number(fd.get("score") || 0),
       ownerId: (String(fd.get("ownerId") || "") || null),
       customFields: readCustomFieldValues(fd, customFieldDefs, "CONTACT"),
     };
@@ -241,12 +243,12 @@ export function ContactsView({
           <table>
             <thead>
               <tr>
-                <th><input type="checkbox" checked={rows.length > 0 && selected.length === rows.length} onChange={(e) => setSelected(e.target.checked ? rows.map((row) => row.id) : [])} /></th><th>Nome</th><th>Empresa</th><th>E-mail</th><th>Telefone</th><th>Tags</th><th>Responsável</th><th>Negócios</th>
+                <th><input type="checkbox" checked={rows.length > 0 && selected.length === rows.length} onChange={(e) => setSelected(e.target.checked ? rows.map((row) => row.id) : [])} /></th><th>Nome</th><th>Empresa</th><th>Origem</th><th>Score</th><th>E-mail</th><th>Telefone</th><th>Tags</th><th>Responsável</th><th>Negócios</th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 ? (
-                <tr><td colSpan={8}><div className="empty-state"><Icon.empty /><div>{loading ? "Buscando…" : "Nenhum contato encontrado"}</div></div></td></tr>
+                <tr><td colSpan={10}><div className="empty-state"><Icon.empty /><div>{loading ? "Buscando…" : "Nenhum contato encontrado"}</div></div></td></tr>
               ) : (
                 rows.map((c) => {
                   const owner = team.find((m) => m.id === c.ownerId);
@@ -264,6 +266,8 @@ export function ContactsView({
                         </div>
                       </td>
                       <td>{c.company || <span className="muted">—</span>}</td>
+                      <td>{c.source || <span className="muted">—</span>}</td>
+                      <td><span className="pill">{c.score}</span></td>
                       <td>{c.email}</td>
                       <td>{c.phone || <span className="muted">—</span>}</td>
                       <td>
@@ -333,6 +337,16 @@ export function ContactsView({
                       <option value="">Sem responsável</option>
                       {team.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
                     </select>
+                  </div>
+                </div>
+                <div className="field-row">
+                  <div className="field">
+                    <label>Origem</label>
+                    <input name="source" defaultValue={modal.data?.source ?? ""} placeholder="Ex.: Tráfego pago, indicação" />
+                  </div>
+                  <div className="field">
+                    <label>Score (0 a 100)</label>
+                    <input name="score" type="number" min="0" max="100" defaultValue={modal.data?.score ?? 0} />
                   </div>
                 </div>
                 <div className="field">

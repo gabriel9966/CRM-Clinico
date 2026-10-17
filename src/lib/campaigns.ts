@@ -49,6 +49,20 @@ function providerMessageId(value: unknown) {
   return result.messages?.[0]?.id || result.key?.id || result.messageId || result.id || null;
 }
 
+function localHour(timezone: string) {
+  const part = new Intl.DateTimeFormat("en-US", { timeZone: timezone || "America/Sao_Paulo", hour: "2-digit", hourCycle: "h23" })
+    .formatToParts(new Date())
+    .find((part) => part.type === "hour")?.value;
+  return Number(part ?? 0);
+}
+
+function isWithinSendWindow(hour: number, start: number, end: number) {
+  // start 8/end 20 = 08:00 até 19:59. Janelas que cruzam meia-noite também
+  // são válidas (ex.: 20h até 6h).
+  if (start === end) return true;
+  return start < end ? hour >= start && hour < end : hour >= start || hour < end;
+}
+
 /** Cria o snapshot de destinatários. Pode ser chamado muitas vezes sem duplicar. */
 export async function prepareCampaignRecipients(campaignId: string) {
   const campaign = await prisma.campaign.findUnique({ include: { segment: true }, where: { id: campaignId } });
@@ -69,12 +83,26 @@ export async function prepareCampaignRecipients(campaignId: string) {
 export async function processCampaign(campaignId: string) {
   const campaign = await prisma.campaign.findUnique({
     where: { id: campaignId },
-    include: { connection: true, template: true },
+    include: { connection: true, template: true, organization: { select: { timezone: true } } },
   });
   if (!campaign || campaign.status !== "RUNNING") return { processed: 0, done: false };
   if (campaign.connection.status !== "CONNECTED") {
     await prisma.campaign.update({ where: { id: campaignId }, data: { status: "PAUSED", pausedAt: new Date() } });
     return { processed: 0, done: false, error: "A instância remetente está desconectada; campanha pausada." };
+  }
+
+  if (!isWithinSendWindow(localHour(campaign.organization.timezone), campaign.sendWindowStart, campaign.sendWindowEnd)) {
+    await prisma.campaign.update({ where: { id: campaign.id }, data: { nextRunAt: new Date(Date.now() + 60 * 60_000) } });
+    return { processed: 0, done: false, waiting: "Fora da janela de envio configurada." };
+  }
+  if (campaign.dailyLimit > 0) {
+    const sentLast24h = await prisma.campaignRecipient.count({
+      where: { campaignId, sentAt: { gte: new Date(Date.now() - 24 * 60 * 60_000) }, status: { in: ["SENT", "DELIVERED", "READ", "RESPONDED"] } },
+    });
+    if (sentLast24h >= campaign.dailyLimit) {
+      await prisma.campaign.update({ where: { id: campaign.id }, data: { nextRunAt: new Date(Date.now() + 60 * 60_000) } });
+      return { processed: 0, done: false, waiting: "Limite de envio das últimas 24 horas atingido." };
+    }
   }
 
   const recipients = await prisma.campaignRecipient.findMany({
@@ -137,6 +165,10 @@ export async function markCampaignDelivery(providerMessageId: string, status: st
   const update = status === "read" ? { status: "READ" as const, readAt: new Date() } : status === "delivered" ? { status: "DELIVERED" as const, deliveredAt: new Date() } : status === "failed" ? { status: "FAILED" as const, failedAt: new Date(), failureReason: "Falha informada pelo provedor." } : null;
   if (!update) return;
   await prisma.campaignRecipient.updateMany({ where: { providerMessageId }, data: update });
+  // A mesma confirmação também atualiza a mensagem apresentada no histórico
+  // da conversa (sent → delivered/read/failed), e não só a métrica da campanha.
+  const messageStatus = status === "read" ? "read" : status === "delivered" ? "delivered" : "failed";
+  await prisma.message.updateMany({ where: { externalMessageId: providerMessageId }, data: { status: messageStatus } });
 }
 
 export async function markCampaignResponse(organizationId: string, contactId: string, connectionId: string) {

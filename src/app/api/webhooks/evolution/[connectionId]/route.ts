@@ -4,7 +4,7 @@ import { triggerAutomations } from "@/lib/automation/engine";
 import { assignNextOwner } from "@/lib/assignment";
 import { guardWebhook } from "@/lib/webhook-auth";
 import { ensureLiveContact } from "@/lib/inbound";
-import { createMessage } from "@/lib/messages";
+import { createInboundMessage } from "@/lib/messages";
 import { logWebhook } from "@/lib/webhook-log";
 import { markCampaignResponse } from "@/lib/campaigns";
 
@@ -96,7 +96,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ con
 
   const time = data?.messageTimestamp ? new Date(data.messageTimestamp * 1000) : new Date();
 
-  await createMessage(prisma, {
+  const inbound = await createInboundMessage(prisma, {
     organizationId,
     contactId,
     connectionId,
@@ -104,14 +104,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ con
     direction: fromMe ? "out" : "in",
     time,
     status: "sent",
+    externalMessageId: data?.key?.id,
   });
 
-  if (!fromMe) {
+  if (!fromMe && !inbound.duplicate) {
     await triggerAutomations(organizationId, "MESSAGE_RECEIVED", { contactId });
     await markCampaignResponse(organizationId, contactId, connectionId);
   }
 
-  await logWebhook({ organizationId, connectionId, source: "evolution", event, statusCode: 200, payload: body });
+  await logWebhook({ organizationId, connectionId, source: "evolution", event, statusCode: 200, detail: inbound.duplicate ? "Evento duplicado ignorado" : undefined, payload: body });
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, duplicate: inbound.duplicate });
 }

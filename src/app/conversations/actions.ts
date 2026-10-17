@@ -59,6 +59,24 @@ export async function sendMessage(conversationId: string, text: string): Promise
   return { ok: true, status: result.status, ...(result.error ? { error: result.error } : {}) };
 }
 
+/** Reenvia uma saída que falhou pela mesma instância da conversa. A tentativa
+ * anterior é mantida no histórico; o reenvio sempre vira uma nova tentativa. */
+export async function retryFailedMessage(conversationId: string, messageId: string): Promise<SendOutcome> {
+  const user = await requireOrgUser();
+  const conversation = await getConversationForUser(user, conversationId);
+  if (!conversation || !conversation.connectionId) return { ok: false, code: "sem_permissao", error: "Atendimento ou canal não disponível para reenvio." };
+  const message = await prisma.message.findFirst({
+    where: { id: messageId, organizationId: user.organizationId, conversationId, direction: "out", status: "failed" },
+    select: { text: true },
+  });
+  if (!message) return { ok: false, code: "sem_permissao", error: "Esta mensagem não está disponível para reenvio." };
+  const result = await sendContactMessage(user.organizationId, conversation.contactId, message.text, { connectionId: conversation.connectionId, senderId: user.id, conversationId });
+  await audit(user.organizationId, { action: "message.retry", entity: "Conversation", entityId: conversationId, ...actorOf(user), meta: { messageId, result: result.ok ? result.status : result.code } });
+  revalidatePath("/conversations");
+  if (!result.ok) return { ok: false, code: result.code, error: result.error };
+  return { ok: true, status: result.status, ...(result.error ? { error: result.error } : {}) };
+}
+
 export async function assignConversation(conversationId: string, ownerId: string | null, mode: "assign" | "transfer" | "claim" = "assign") {
   const user = await requireOrgUser();
   const conversation = await prisma.conversation.findFirst({ where: { id: conversationId, organizationId: user.organizationId }, select: { ownerId: true } });

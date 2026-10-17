@@ -47,6 +47,8 @@ export function toContactDTO(c: ContactRow): ContactDTO {
     phone: c.phone,
     tags: parseTags(c.tags),
     notes: c.notes,
+    source: c.source,
+    score: c.score,
     ownerId: c.ownerId,
     customFields: (c.customFields as Record<string, unknown>) ?? {},
     createdAt: c.createdAt.toISOString(),
@@ -611,6 +613,9 @@ export type DashboardAggregates = {
   ownerTotals: { ownerId: string | null; sum: number }[];
   stageSpeed: { stageId: string; avgMs: number; count: number }[];
   attention: { overdueActivities: number; dueThisWeek: number; inactiveContacts: number };
+  service: { inbound: number; answered: number; firstResponseMs: number | null; slaRate: number; delivered: number; read: number; failed: number };
+  channels: { connectionId: string | null; label: string; provider: string; inbound: number; outbound: number; delivered: number; read: number; failed: number }[];
+  campaigns: { id: string; name: string; status: string; total: number; sent: number; responded: number; failed: number }[];
 };
 
 export async function getDashboardAggregates(organizationId: string): Promise<DashboardAggregates> {
@@ -619,7 +624,8 @@ export async function getDashboardAggregates(organizationId: string): Promise<Da
   weekEnd.setDate(weekEnd.getDate() + 7);
   const inactiveSince = new Date(now);
   inactiveSince.setDate(inactiveSince.getDate() - 2);
-  const [byStage, byOwner, monthly, speed, overdueActivities, dueThisWeek, inactiveContacts] = await Promise.all([
+  const reportSince = new Date(now.getTime() - 30 * 86_400_000);
+  const [byStage, byOwner, monthly, speed, overdueActivities, dueThisWeek, inactiveContacts, responseRows, messageRows, connections, campaignRows, campaignCounts] = await Promise.all([
     prisma.opportunity.groupBy({
       by: ["stageId"],
       where: { organizationId },
@@ -645,7 +651,67 @@ export async function getDashboardAggregates(organizationId: string): Promise<Da
     prisma.activity.count({ where: { organizationId, done: false, dueAt: { lt: now } } }),
     prisma.opportunity.count({ where: { organizationId, expectedClose: { gte: now, lte: weekEnd } } }),
     prisma.contact.count({ where: { organizationId, lastMessageAt: { not: null, lt: inactiveSince } } }),
+    // Primeira resposta por conversa: pega a primeira entrada no período e a
+    // primeira saída posterior, sem carregar todas as mensagens para a memória.
+    prisma.$queryRaw<{ inbound: number; answered: number; avgMs: number | null; slaAnswered: number }[]>`
+      WITH first_incoming AS (
+        SELECT DISTINCT ON ("conversationId") "conversationId", "time" AS received_at
+        FROM "Message"
+        WHERE "organizationId" = ${organizationId}
+          AND direction = 'in'
+          AND "conversationId" IS NOT NULL
+          AND "time" >= ${reportSince}
+        ORDER BY "conversationId", "time" ASC
+      ), responses AS (
+        SELECT incoming."conversationId", incoming.received_at,
+          (SELECT MIN(reply."time") FROM "Message" reply
+            WHERE reply."conversationId" = incoming."conversationId"
+              AND reply.direction = 'out'
+              AND reply."time" >= incoming.received_at) AS replied_at
+        FROM first_incoming incoming
+      )
+      SELECT COUNT(*)::int AS inbound,
+        COUNT(replied_at)::int AS answered,
+        AVG(EXTRACT(EPOCH FROM (replied_at - received_at)) * 1000)::float8 AS "avgMs",
+        COUNT(*) FILTER (WHERE replied_at IS NOT NULL AND replied_at - received_at <= INTERVAL '15 minutes')::int AS "slaAnswered"
+      FROM responses`,
+    prisma.message.groupBy({
+      by: ["connectionId", "direction", "status"],
+      where: { organizationId, time: { gte: reportSince } },
+      _count: { _all: true },
+    }),
+    prisma.connection.findMany({ where: { organizationId }, select: { id: true, label: true, provider: true } }),
+    prisma.campaign.findMany({
+      where: { organizationId },
+      select: { id: true, name: true, status: true },
+      orderBy: { createdAt: "desc" },
+      take: 6,
+    }),
+    prisma.campaignRecipient.groupBy({
+      by: ["campaignId", "status"],
+      where: { campaign: { organizationId } },
+      _count: { _all: true },
+    }),
   ]);
+
+  const response = responseRows[0] ?? { inbound: 0, answered: 0, avgMs: null, slaAnswered: 0 };
+  const connectionInfo = new Map(connections.map((connection) => [connection.id, connection]));
+  const channels = new Map<string, { connectionId: string | null; label: string; provider: string; inbound: number; outbound: number; delivered: number; read: number; failed: number }>();
+  for (const row of messageRows) {
+    const key = row.connectionId ?? "legacy";
+    const info = row.connectionId ? connectionInfo.get(row.connectionId) : null;
+    const channel = channels.get(key) ?? { connectionId: row.connectionId, label: info?.label ?? "Sem instância", provider: info?.provider ?? "LEGACY", inbound: 0, outbound: 0, delivered: 0, read: 0, failed: 0 };
+    if (row.direction === "in") channel.inbound += row._count._all;
+    else channel.outbound += row._count._all;
+    if (row.status === "delivered") channel.delivered += row._count._all;
+    if (row.status === "read") channel.read += row._count._all;
+    if (row.status === "failed") channel.failed += row._count._all;
+    channels.set(key, channel);
+  }
+  const campaignSummary = campaignRows.map((campaign) => {
+    const count = (status: string) => campaignCounts.filter((row) => row.campaignId === campaign.id && row.status === status).reduce((sum, row) => sum + row._count._all, 0);
+    return { id: campaign.id, name: campaign.name, status: campaign.status, total: campaignCounts.filter((row) => row.campaignId === campaign.id).reduce((sum, row) => sum + row._count._all, 0), sent: count("SENT") + count("DELIVERED") + count("READ") + count("RESPONDED"), responded: count("RESPONDED"), failed: count("FAILED") };
+  });
 
   return {
     stageTotals: byStage.map((g) => ({ stageId: g.stageId, count: g._count._all, sum: g._sum.value ?? 0 })),
@@ -653,6 +719,9 @@ export async function getDashboardAggregates(organizationId: string): Promise<Da
     ownerTotals: byOwner.map((g) => ({ ownerId: g.ownerId, sum: g._sum.value ?? 0 })),
     stageSpeed: speed.map((r) => ({ stageId: r.stageId, avgMs: Number(r.avgMs), count: Number(r.count) })),
     attention: { overdueActivities, dueThisWeek, inactiveContacts },
+    service: { inbound: Number(response.inbound), answered: Number(response.answered), firstResponseMs: response.avgMs === null ? null : Number(response.avgMs), slaRate: Number(response.inbound) ? (Number(response.slaAnswered) / Number(response.inbound)) * 100 : 0, delivered: [...channels.values()].reduce((sum, channel) => sum + channel.delivered, 0), read: [...channels.values()].reduce((sum, channel) => sum + channel.read, 0), failed: [...channels.values()].reduce((sum, channel) => sum + channel.failed, 0) },
+    channels: [...channels.values()].sort((a, b) => b.inbound + b.outbound - (a.inbound + a.outbound)),
+    campaigns: campaignSummary,
   };
 }
 

@@ -22,7 +22,7 @@ export default async function CampaignsPage() {
       scheduledAt: campaign.scheduledAt?.toISOString() ?? null, createdAt: campaign.createdAt.toISOString(),
       connectionId: campaign.connectionId, connectionLabel: campaign.connection.label, connectionProvider: campaign.connection.provider,
       segmentId: campaign.segmentId, segmentName: campaign.segment?.name ?? null,
-      sendLimit: campaign.sendLimit, batchSize: campaign.batchSize, intervalMinutes: campaign.intervalMinutes, duplicateWindowHours: campaign.duplicateWindowHours,
+      sendLimit: campaign.sendLimit, batchSize: campaign.batchSize, intervalMinutes: campaign.intervalMinutes, duplicateWindowHours: campaign.duplicateWindowHours, dailyLimit: campaign.dailyLimit, sendWindowStart: campaign.sendWindowStart, sendWindowEnd: campaign.sendWindowEnd,
       metrics: {
         total: all.length, pending: count("PENDING") + count("SENDING"), sent: count("SENT"), delivered: count("DELIVERED"), read: count("READ"), responded: count("RESPONDED"), failed: count("FAILED"), skipped: count("SKIPPED"),
         conversions: all.filter((recipient) => recipient.sentAt && recipient.contact.opportunities.some((opportunity) => opportunity.createdAt >= recipient.sentAt!)).length,

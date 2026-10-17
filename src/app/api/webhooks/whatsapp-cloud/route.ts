@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { decryptJson } from "@/lib/crypto";
 import { verifyMetaSignature } from "@/lib/webhook-auth";
 import { assignNextOwner } from "@/lib/assignment";
-import { createMessage } from "@/lib/messages";
+import { createInboundMessage } from "@/lib/messages";
 import { triggerAutomations } from "@/lib/automation/engine";
 import { logWebhook } from "@/lib/webhook-log";
 import { markCampaignDelivery, markCampaignResponse } from "@/lib/campaigns";
@@ -11,7 +11,7 @@ import { ensureLiveContact } from "@/lib/inbound";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 
 type CloudConfig = { phoneNumberId: string; verifyToken?: string };
-type CloudBody = { entry?: Array<{ changes?: Array<{ field?: string; value?: { metadata?: { phone_number_id?: string }; contacts?: Array<{ wa_id?: string; profile?: { name?: string } }>; messages?: Array<{ from?: string; text?: { body?: string }; timestamp?: string; type?: string }>; statuses?: Array<{ id?: string; status?: string }> } }> }> };
+type CloudBody = { entry?: Array<{ changes?: Array<{ field?: string; value?: { metadata?: { phone_number_id?: string }; contacts?: Array<{ wa_id?: string; profile?: { name?: string } }>; messages?: Array<{ id?: string; from?: string; text?: { body?: string }; timestamp?: string; type?: string }>; statuses?: Array<{ id?: string; status?: string }> } }> }> };
 
 export async function GET(req: NextRequest) {
   const mode = req.nextUrl.searchParams.get("hub.mode");
@@ -51,10 +51,12 @@ export async function POST(req: NextRequest) {
       }
       // Contato apagado (lixeira) que volta a escrever: a mensagem vai para um contato ativo.
       const contactId = await ensureLiveContact(channel, connection.organizationId, { name: profile, phone: `+${externalId}` });
-      await createMessage(prisma, { organizationId: connection.organizationId, contactId, connectionId: connection.id, text, direction: "in", time: incoming.timestamp ? new Date(Number(incoming.timestamp) * 1000) : new Date(), status: "sent" });
-      await triggerAutomations(connection.organizationId, "MESSAGE_RECEIVED", { contactId });
-      await markCampaignResponse(connection.organizationId, contactId, connection.id);
-      await logWebhook({ organizationId: connection.organizationId, connectionId: connection.id, source: "whatsapp-cloud", event: change.field, statusCode: 200, payload: incoming });
+      const inbound = await createInboundMessage(prisma, { organizationId: connection.organizationId, contactId, connectionId: connection.id, text, direction: "in", time: incoming.timestamp ? new Date(Number(incoming.timestamp) * 1000) : new Date(), status: "sent", externalMessageId: incoming.id });
+      if (!inbound.duplicate) {
+        await triggerAutomations(connection.organizationId, "MESSAGE_RECEIVED", { contactId });
+        await markCampaignResponse(connection.organizationId, contactId, connection.id);
+      }
+      await logWebhook({ organizationId: connection.organizationId, connectionId: connection.id, source: "whatsapp-cloud", event: change.field, statusCode: 200, detail: inbound.duplicate ? "Evento duplicado ignorado" : undefined, payload: incoming });
     }
     if ((value?.statuses?.length ?? 0) > 0) {
       for (const status of value?.statuses ?? []) {

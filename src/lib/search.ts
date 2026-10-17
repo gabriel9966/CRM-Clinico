@@ -60,6 +60,8 @@ export async function globalSearch(organizationId: string, query: string): Promi
       phone: c.phone,
       tags: parseTags(c.tags),
       notes: c.notes,
+      source: c.source,
+      score: c.score,
       ownerId: c.ownerId,
       customFields: (c.customFields as Record<string, unknown>) ?? {},
       createdAt: c.createdAt.toISOString(),

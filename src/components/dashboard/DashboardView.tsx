@@ -13,6 +13,9 @@ export type DashboardData = {
   ownerTotals: { ownerId: string | null; sum: number }[];
   stageSpeed: { stageId: string; avgMs: number; count: number }[];
   attention: { overdueActivities: number; dueThisWeek: number; inactiveContacts: number };
+  service: { inbound: number; answered: number; firstResponseMs: number | null; slaRate: number; delivered: number; read: number; failed: number };
+  channels: { connectionId: string | null; label: string; provider: string; inbound: number; outbound: number; delivered: number; read: number; failed: number }[];
+  campaigns: { id: string; name: string; status: string; total: number; sent: number; responded: number; failed: number }[];
 };
 
 const MONTH_LABELS = [
@@ -22,6 +25,12 @@ const MONTH_LABELS = [
 function monthLabel(key: string) {
   const [y, m] = key.split("-").map(Number);
   return `${MONTH_LABELS[m - 1]}/${String(y).slice(2)}`;
+}
+
+function durationLabel(ms: number | null) {
+  if (ms === null) return "—";
+  const minutes = Math.round(ms / 60_000);
+  return minutes < 60 ? `${minutes} min` : `${(minutes / 60).toFixed(1)} h`;
 }
 
 export function DashboardView({
@@ -216,6 +225,17 @@ export function DashboardView({
           </div>
         </section>
 
+        <section className="chart-card" aria-label="Qualidade do atendimento" style={{ marginBottom: 18 }}>
+          <div className="chart-title">Qualidade do atendimento</div>
+          <div className="chart-sub">Últimos 30 dias · SLA considerado: primeira resposta em até 15 minutos.</div>
+          <div className="dash-stats" style={{ marginTop: 16 }}>
+            <StatTile label="1ª resposta média" value={durationLabel(data.service.firstResponseMs)} delta={`${data.service.answered}/${data.service.inbound} conversas respondidas`} color="var(--primary)" bg="var(--primary-soft)" icon={<Icon.chat />} />
+            <StatTile label="SLA cumprido" value={`${data.service.slaRate.toFixed(0)}%`} delta="respostas em até 15 min" color="var(--green)" bg="var(--green-soft)" icon={<Icon.up />} />
+            <StatTile label="Mensagens lidas" value={String(data.service.read)} delta={`${data.service.delivered} entregues`} color="var(--text-soft)" bg="var(--slate-soft)" icon={<Icon.dashboard />} />
+            <StatTile label="Falhas de envio" value={String(data.service.failed)} delta="confira a conexão/remetente" color="var(--red)" bg="var(--red-soft)" icon={<Icon.down />} />
+          </div>
+        </section>
+
         <div className="charts-row">
           <div className="chart-card">
             <div className="chart-title">Dados mensais</div>
@@ -250,6 +270,23 @@ export function DashboardView({
               <div className="empty-state"><Icon.empty /><div>Ainda sem etapas concluídas pra calcular velocity</div></div>
             ) : (
               <StageSpeedBars rows={stageSpeed.rows} max={stageSpeed.maxDays} />
+            )}
+          </div>
+        </div>
+
+        <div className="charts-row" style={{ marginTop: 18 }}>
+          <div className="chart-card">
+            <div className="chart-title">Atendimento por instância</div>
+            <div className="chart-sub">Volume e qualidade por canal conectado · últimos 30 dias</div>
+            {data.channels.length === 0 ? <div className="empty-state"><Icon.empty /><div>Sem mensagens de canais conectados no período</div></div> : (
+              <div className="table-wrap" style={{ marginTop: 12 }}><table><thead><tr><th>Instância</th><th>Canal</th><th>Recebidas</th><th>Enviadas</th><th>Lidas</th><th>Falhas</th></tr></thead><tbody>{data.channels.map((channel) => <tr key={channel.connectionId ?? "legacy"}><td>{channel.label}</td><td className="muted">{channel.provider}</td><td>{channel.inbound}</td><td>{channel.outbound}</td><td>{channel.read}</td><td>{channel.failed}</td></tr>)}</tbody></table></div>
+            )}
+          </div>
+          <div className="chart-card">
+            <div className="chart-title">Campanhas recentes</div>
+            <div className="chart-sub">Envios, respostas e falhas por campanha</div>
+            {data.campaigns.length === 0 ? <div className="empty-state"><Icon.empty /><div>Nenhuma campanha criada ainda</div></div> : (
+              <div className="table-wrap" style={{ marginTop: 12 }}><table><thead><tr><th>Campanha</th><th>Enviados</th><th>Respostas</th><th>Falhas</th></tr></thead><tbody>{data.campaigns.map((campaign) => <tr key={campaign.id}><td>{campaign.name}<div className="muted" style={{ fontSize: 11 }}>{campaign.status} · {campaign.total} contatos</div></td><td>{campaign.sent}</td><td>{campaign.responded}</td><td>{campaign.failed}</td></tr>)}</tbody></table></div>
             )}
           </div>
         </div>
