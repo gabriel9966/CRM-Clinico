@@ -31,12 +31,24 @@ export function toCsv(rows: Record<string, unknown>[], columns: string[]): strin
   return [csvHeader(columns), ...rows.map((r) => csvLine(r, columns))].join("\n");
 }
 
-export function parseCsv(text: string): Record<string, string>[] {
+export function parseCsvTable(text: string): { headers: string[]; rows: Record<string, string>[] } {
   const rows: string[][] = [];
   let row: string[] = [];
   let field = "";
   let inQuotes = false;
-  const src = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const src = text.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  let commas = 0;
+  let semicolons = 0;
+  let headerQuoted = false;
+  for (let i = 0; i < src.length; i++) {
+    if (src[i] === '"') {
+      if (headerQuoted && src[i + 1] === '"') i++;
+      else headerQuoted = !headerQuoted;
+    } else if (!headerQuoted && src[i] === "\n") break;
+    else if (!headerQuoted && src[i] === ",") commas++;
+    else if (!headerQuoted && src[i] === ";") semicolons++;
+  }
+  const delimiter = semicolons > commas ? ";" : ",";
 
   for (let i = 0; i < src.length; i++) {
     const ch = src[i];
@@ -53,7 +65,7 @@ export function parseCsv(text: string): Record<string, string>[] {
       }
     } else if (ch === '"') {
       inQuotes = true;
-    } else if (ch === ",") {
+    } else if (ch === delimiter) {
       row.push(field);
       field = "";
     } else if (ch === "\n") {
@@ -65,19 +77,27 @@ export function parseCsv(text: string): Record<string, string>[] {
       field += ch;
     }
   }
+  if (inQuotes) throw new Error("CSV inválido: aspas não fechadas.");
   if (field.length > 0 || row.length > 0) {
     row.push(field);
     rows.push(row);
   }
 
   const nonEmpty = rows.filter((r) => r.some((c) => c.trim() !== ""));
-  if (nonEmpty.length === 0) return [];
+  if (nonEmpty.length === 0) return { headers: [], rows: [] };
   const header = nonEmpty[0].map((h) => h.trim());
-  return nonEmpty.slice(1).map((r) => {
+  if (header.some((h) => !h) || new Set(header).size !== header.length) {
+    throw new Error("CSV inválido: cabeçalhos vazios ou repetidos.");
+  }
+  return { headers: header, rows: nonEmpty.slice(1).map((r) => {
     const obj: Record<string, string> = {};
     header.forEach((h, i) => {
       obj[h] = (r[i] ?? "").trim();
     });
     return obj;
-  });
+  }) };
+}
+
+export function parseCsv(text: string): Record<string, string>[] {
+  return parseCsvTable(text).rows;
 }

@@ -9,6 +9,7 @@ import { CustomFieldInputs, readCustomFieldValues } from "@/components/shared/Cu
 import { EntityPicker } from "@/components/shared/EntityPicker";
 import {
   createPipeline,
+  setPipelineGroup,
   renamePipeline,
   deletePipeline,
   addStage,
@@ -24,7 +25,21 @@ import {
   configureStage,
 } from "@/app/pipeline/actions";
 import { fetchPipelineBoard, fetchStageCards } from "@/app/listings/actions";
-import { ImportCsvModal } from "@/components/shared/ImportCsvModal";
+import { ImportCsvModal, type ImportColumn } from "@/components/shared/ImportCsvModal";
+
+const OPPORTUNITY_IMPORT_COLUMNS: ImportColumn[] = [
+  { key: "title", label: "Título", aliases: ["titulo", "negocio", "negócio", "oportunidade"], required: true },
+  { key: "value", label: "Valor", aliases: ["preco", "preço", "amount"] },
+  { key: "contact_email", label: "E-mail do contato", aliases: ["email", "e-mail"] },
+  { key: "contact_phone", label: "Telefone do contato", aliases: ["telefone", "celular", "whatsapp"] },
+  { key: "contact_name", label: "Nome do contato", aliases: ["contato", "nome do lead", "lead"] },
+  { key: "pipeline", label: "Pipeline", aliases: ["funil"] },
+  { key: "stage", label: "Etapa", aliases: ["estagio", "estágio", "fase"] },
+  { key: "owner", label: "Responsável", aliases: ["atendente", "vendedor"] },
+  { key: "tags", label: "Tags", aliases: ["etiquetas"] },
+  { key: "expected_close", label: "Previsão de fechamento", aliases: ["data de fechamento", "fechamento"] },
+  { key: "loss_reason", label: "Motivo de perda", aliases: ["motivo da perda"] },
+];
 
 type Modal =
   | { type: "opportunity"; data: DealCardDTO | null }
@@ -74,6 +89,16 @@ export function PipelineBoard({
   const [busy, setBusy] = useState(false);
 
   const pipeline = pipelines.find((p) => p.id === currentPipelineId) ?? pipelines[0];
+  const groups = useMemo(() => [...new Set(pipelines.map((p) => p.group))], [pipelines]);
+  const currentGroup = pipeline?.group ?? groups[0] ?? "Geral";
+  const groupPipelines = pipelines.filter((p) => p.group === currentGroup);
+  const lastInGroup = useRef<Record<string, string>>({});
+  if (pipeline) lastInGroup.current[pipeline.group] = pipeline.id;
+  function selectGroup(g: string) {
+    const remembered = lastInGroup.current[g];
+    const target = pipelines.find((p) => p.id === remembered && p.group === g) ?? pipelines.find((p) => p.group === g);
+    if (target) setCurrentPipelineId(target.id);
+  }
   const stages = useMemo(() => (pipeline ? [...pipeline.stages].sort((a, b) => a.order - b.order) : []), [pipeline]);
   const stageKey = stages.map((s) => s.id).join(",");
 
@@ -247,8 +272,21 @@ export function PipelineBoard({
       </div>
 
       <div className="content">
+        {groups.length > 1 && (
+          <div className="pipeline-bar pipeline-groups">
+            {groups.map((g) => (
+              <div
+                key={g}
+                className={`pipeline-tab group ${g === currentGroup ? "active" : ""}`}
+                onClick={() => selectGroup(g)}
+              >
+                {g} <span className="muted">({pipelines.filter((p) => p.group === g).length})</span>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="pipeline-bar">
-          {pipelines.map((p) => (
+          {groupPipelines.map((p) => (
             <div
               key={p.id}
               className={`pipeline-tab ${p.id === currentPipelineId ? "active" : ""}`}
@@ -431,8 +469,10 @@ export function PipelineBoard({
         <PipelineNewModal
           busy={busy}
           onClose={closeModal}
-          onSubmit={async (name) => {
-            await run(() => createPipeline(name));
+          groups={groups}
+          defaultGroup={currentGroup}
+          onSubmit={async (name, group) => {
+            await run(() => createPipeline(name, group));
             closeModal();
           }}
         />
@@ -445,6 +485,8 @@ export function PipelineBoard({
           canDelete={pipelines.length > 1}
           busy={busy}
           onClose={closeModal}
+          groups={groups}
+          onSetGroup={(group) => run(() => setPipelineGroup(modal.pipelineId, group))}
           onRenamePipeline={(name) => run(() => renamePipeline(modal.pipelineId, name))}
           onAddStage={() => run(() => addStage(modal.pipelineId))}
           onRenameStage={(stageId, label) => run(() => renameStage(stageId, label))}
@@ -464,8 +506,9 @@ export function PipelineBoard({
       {modal?.type === "import" && (
         <ImportCsvModal
           title="Importar oportunidades (CSV)"
-          hint="O contato precisa já existir (casado por e-mail ou nome). Pipeline/etapa/responsável são opcionais e casados pelo nome exato."
-          templateColumns="title, value, contact_email, contact_name, pipeline, stage, owner, tags, expected_close"
+          hint="Importe os contatos antes. Associe ao menos e-mail, telefone ou nome do contato; pipeline, etapa e responsável são encontrados pelo nome. Negócios já existentes serão ignorados."
+          columns={OPPORTUNITY_IMPORT_COLUMNS}
+          templateName="modelo-oportunidades.csv"
           onImport={(csv) => importOpportunitiesCsv(csv, currentPipelineId)}
           onClose={closeModal}
           onDone={() => {
@@ -618,16 +661,32 @@ function OpportunityModal({
   );
 }
 
+function GroupInput({ value, onChange, groups, onBlur }: { value: string; onChange: (v: string) => void; groups: string[]; onBlur?: () => void }) {
+  return (
+    <>
+      <input list="pipeline-group-options" value={value} onChange={(e) => onChange(e.target.value)} onBlur={onBlur} placeholder="Ex: Pré-venda, Venda, Pós-venda..." maxLength={40} />
+      <datalist id="pipeline-group-options">
+        {groups.map((g) => <option key={g} value={g} />)}
+      </datalist>
+    </>
+  );
+}
+
 function PipelineNewModal({
   busy,
+  groups,
+  defaultGroup,
   onClose,
   onSubmit,
 }: {
   busy: boolean;
+  groups: string[];
+  defaultGroup: string;
   onClose: () => void;
-  onSubmit: (name: string) => void;
+  onSubmit: (name: string, group: string) => void;
 }) {
   const [name, setName] = useState("");
+  const [group, setGroup] = useState(defaultGroup);
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -638,7 +697,7 @@ function PipelineNewModal({
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            if (name.trim()) onSubmit(name.trim());
+            if (name.trim()) onSubmit(name.trim(), group.trim() || "Geral");
           }}
         >
           <div className="modal-body">
@@ -651,6 +710,10 @@ function PipelineNewModal({
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Ex: Pós-venda, Suporte, Imóveis..."
               />
+            </div>
+            <div className="field">
+              <label>Grupo</label>
+              <GroupInput value={group} onChange={setGroup} groups={groups} />
             </div>
             <div style={{ fontSize: 12, color: "var(--text-faint)" }}>
               Vai começar com as etapas padrão (Lead → Ganho/Perdido). Você pode editar depois em
@@ -672,6 +735,8 @@ function PipelineManageModal({
   stageCounts,
   canDelete,
   busy,
+  groups,
+  onSetGroup,
   onClose,
   onRenamePipeline,
   onAddStage,
@@ -686,6 +751,8 @@ function PipelineManageModal({
   stageCounts: Record<string, number>;
   canDelete: boolean;
   busy: boolean;
+  groups: string[];
+  onSetGroup: (group: string) => void;
   onClose: () => void;
   onRenamePipeline: (name: string) => void;
   onAddStage: () => void;
@@ -698,6 +765,7 @@ function PipelineManageModal({
 }) {
   const stages = [...pipeline.stages].sort((a, b) => a.order - b.order);
   const [openColorFor, setOpenColorFor] = useState<string | null>(null);
+  const [groupDraft, setGroupDraft] = useState(pipeline.group);
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -710,6 +778,15 @@ function PipelineManageModal({
           <div className="field">
             <label>Nome do pipeline</label>
             <input defaultValue={pipeline.name} onBlur={(e) => onRenamePipeline(e.target.value)} />
+          </div>
+          <div className="field">
+            <label>Grupo</label>
+            <GroupInput
+              value={groupDraft}
+              onChange={setGroupDraft}
+              groups={groups}
+              onBlur={() => { if (groupDraft.trim() && groupDraft.trim() !== pipeline.group) onSetGroup(groupDraft.trim()); }}
+            />
           </div>
           <div className="field">
             <label>Etapas</label>

@@ -24,7 +24,7 @@ export async function GET() {
   // Exportar dados de clientes/pacientes fica registrado (LGPD).
   await audit(organizationId, { action: "contact.exported", entity: "Contact", ...actorOf(user) });
 
-  return csvDownload("contatos.csv", ["name", "company", "email", "phone", "tags", "notes", "owner"], async (cursor) => {
+  return csvDownload("contatos.csv", ["name", "company", "email", "phone", "tags", "notes", "owner", "source", "score", "marketing_opt_out"], async (cursor) => {
     const rows = await prisma.contact.findMany({
       where: { organizationId },
       orderBy: { id: "asc" },
@@ -42,6 +42,9 @@ export async function GET() {
         tags: parseTags(c.tags).join(";"),
         notes: c.notes ?? "",
         owner: ownerName(c.ownerId),
+        source: c.source ?? "",
+        score: c.score,
+        marketing_opt_out: c.marketingOptOut ? "sim" : "não",
       })),
       next: hasMore ? page[page.length - 1].id : null,
     };

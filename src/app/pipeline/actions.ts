@@ -5,7 +5,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAdminUser, requireOrgUser } from "@/lib/auth";
 import { triggerAutomations } from "@/lib/automation/engine";
-import { parseCsv } from "@/lib/csv";
+import { importDate, importMoney, importRows, importTags, phoneKey } from "@/lib/crm-import";
 import { recordStageChange } from "@/lib/pipeline-history";
 import { actorOf, audit } from "@/lib/audit";
 import { softDeleteOpportunity } from "@/lib/soft-delete";
@@ -21,7 +21,17 @@ const DEFAULT_STAGES = [
   { label: "Perdido", color: "#dc2626" },
 ];
 
-export async function createPipeline(name: string) {
+function cleanGroup(group?: string) {
+  return (group ?? "").trim().slice(0, 40) || "Geral";
+}
+
+export async function setPipelineGroup(pipelineId: string, group: string) {
+  const { organizationId } = await requireOrgUser();
+  await prisma.pipeline.updateMany({ where: { id: pipelineId, organizationId }, data: { groupName: cleanGroup(group) } });
+  revalidatePath("/pipeline");
+}
+
+export async function createPipeline(name: string, group?: string) {
   const { organizationId } = await requireOrgUser();
   const trimmed = name.trim();
   if (!trimmed) return;
@@ -30,6 +40,7 @@ export async function createPipeline(name: string) {
     data: {
       organizationId,
       name: trimmed,
+      groupName: cleanGroup(group),
       stages: {
         create: DEFAULT_STAGES.map((s, i) => ({ label: s.label, color: s.color, order: i })),
       },
@@ -277,20 +288,30 @@ export async function deleteOpportunity(id: string) {
 // O contato precisa já existir (por e-mail ou nome) — a importação não cria
 // contatos novos, pra evitar duplicar cadastros por erro de digitação.
 export async function importOpportunitiesCsv(csvText: string, defaultPipelineId: string): Promise<ImportSummary> {
-  const { organizationId } = await requireOrgUser();
-  const rows = parseCsv(csvText);
+  const user = await requireOrgUser();
+  const { organizationId } = user;
+  const rows = importRows(csvText, ["title"]);
 
   // Carrega só os contatos citados no CSV (por e-mail ou nome), em vez de todos
   // os da organização — e-mails/nomes são comparados sem diferenciar maiúsculas.
   const wantedEmails = [...new Set(rows.map((r) => (r.contact_email || "").trim().toLowerCase()).filter(Boolean))];
+  const wantedPhones = [...new Set(rows.map((r) => (r.contact_phone || "").trim()).filter(Boolean))];
   const wantedNames = [...new Set(rows.map((r) => (r.contact_name || "").trim().toLowerCase()).filter(Boolean))];
-  const contacts: { id: string; name: string; email: string | null }[] = [];
+  const contacts: { id: string; name: string; email: string | null; phone: string | null }[] = [];
   const CHUNK = 200;
   for (let i = 0; i < wantedEmails.length; i += CHUNK) {
     contacts.push(
       ...(await prisma.contact.findMany({
         where: { organizationId, OR: wantedEmails.slice(i, i + CHUNK).map((email) => ({ email: { equals: email, mode: "insensitive" as const } })) },
-        select: { id: true, name: true, email: true },
+        select: { id: true, name: true, email: true, phone: true },
+      }))
+    );
+  }
+  for (let i = 0; i < wantedPhones.length; i += CHUNK) {
+    contacts.push(
+      ...(await prisma.contact.findMany({
+        where: { organizationId, phone: { in: wantedPhones.slice(i, i + CHUNK) } },
+        select: { id: true, name: true, email: true, phone: true },
       }))
     );
   }
@@ -298,13 +319,15 @@ export async function importOpportunitiesCsv(csvText: string, defaultPipelineId:
     contacts.push(
       ...(await prisma.contact.findMany({
         where: { organizationId, OR: wantedNames.slice(i, i + CHUNK).map((name) => ({ name: { equals: name, mode: "insensitive" as const } })) },
-        select: { id: true, name: true, email: true },
+        select: { id: true, name: true, email: true, phone: true },
       }))
     );
   }
-  const [team, pipelines] = await Promise.all([
+  const uniqueContacts = [...new Map(contacts.map((contact) => [contact.id, contact])).values()];
+  const [team, pipelines, lossReasons] = await Promise.all([
     prisma.user.findMany({ where: { organizationId }, select: { id: true, name: true } }),
     prisma.pipeline.findMany({ where: { organizationId }, include: { stages: { orderBy: { order: "asc" } } } }),
+    prisma.lossReason.findMany({ where: { organizationId, active: true }, select: { id: true, name: true } }),
   ]);
 
   let created = 0;
@@ -320,55 +343,90 @@ export async function importOpportunitiesCsv(csvText: string, defaultPipelineId:
       continue;
     }
 
-    const contact =
-      (row.contact_email && contacts.find((c) => c.email?.toLowerCase() === row.contact_email.toLowerCase())) ||
-      (row.contact_name && contacts.find((c) => c.name.toLowerCase() === row.contact_name.toLowerCase()));
-    if (!contact) {
+    const candidates = row.contact_email?.trim()
+      ? uniqueContacts.filter((contact) => contact.email?.toLowerCase() === row.contact_email.trim().toLowerCase())
+      : row.contact_phone?.trim() && phoneKey(row.contact_phone).length >= 8
+        ? uniqueContacts.filter((contact) => phoneKey(contact.phone ?? "") === phoneKey(row.contact_phone))
+        : uniqueContacts.filter((contact) => contact.name.toLowerCase() === (row.contact_name || "").trim().toLowerCase());
+    if (candidates.length !== 1) {
       skipped++;
-      errors.push(`Linha ${line}: contato "${row.contact_email || row.contact_name || "?"}" não encontrado.`);
+      errors.push(`Linha ${line}: contato "${row.contact_email || row.contact_phone || row.contact_name || "?"}" ${candidates.length ? "ambíguo" : "não encontrado"}.`);
       continue;
     }
+    const contact = candidates[0];
 
-    const pipeline = (row.pipeline && pipelines.find((p) => p.name.toLowerCase() === row.pipeline.toLowerCase())) ||
-      pipelines.find((p) => p.id === defaultPipelineId) ||
-      pipelines[0];
+    const pipelineMatches = row.pipeline?.trim()
+      ? pipelines.filter((p) => p.name.toLowerCase() === row.pipeline.trim().toLowerCase())
+      : [pipelines.find((p) => p.id === defaultPipelineId) || pipelines[0]].filter((p) => !!p);
+    const pipeline = pipelineMatches.length === 1 ? pipelineMatches[0] : undefined;
     if (!pipeline) {
       skipped++;
-      errors.push(`Linha ${line}: nenhum pipeline disponível.`);
+      errors.push(`Linha ${line}: pipeline "${row.pipeline || "padrão"}" ${pipelineMatches.length ? "ambíguo" : "não encontrado"}.`);
       continue;
     }
 
-    const stage =
-      (row.stage && pipeline.stages.find((s) => s.label.toLowerCase() === row.stage.toLowerCase())) ||
-      pipeline.stages[0];
+    const stageMatches = row.stage?.trim()
+      ? pipeline.stages.filter((s) => s.label.toLowerCase() === row.stage.trim().toLowerCase())
+      : [pipeline.stages[0]].filter((stage) => !!stage);
+    const stage = stageMatches.length === 1 ? stageMatches[0] : undefined;
     if (!stage) {
       skipped++;
-      errors.push(`Linha ${line}: pipeline "${pipeline.name}" não tem etapas.`);
+      errors.push(`Linha ${line}: etapa "${row.stage || "padrão"}" ${stageMatches.length ? "ambígua" : "não encontrada"} no pipeline "${pipeline.name}".`);
       continue;
     }
 
-    const owner = row.owner ? team.find((m) => m.name.toLowerCase() === row.owner.toLowerCase()) : undefined;
-    const tags = (row.tags || "").split(";").map((t) => t.trim()).filter(Boolean);
-    await syncTags(organizationId, tags);
-    const value = Number(row.value);
-
-    const newOpp = await prisma.opportunity.create({
-      data: {
-        organizationId,
-        title,
-        value: Number.isFinite(value) ? value : 0,
-        tags: JSON.stringify(tags),
-        contactId: contact.id,
-        pipelineId: pipeline.id,
-        stageId: stage.id,
-        ownerId: owner?.id ?? null,
-        expectedClose: row.expected_close ? new Date(row.expected_close) : null,
-      },
+    const ownerMatches = row.owner?.trim() ? team.filter((m) => m.name.toLowerCase() === row.owner.trim().toLowerCase()) : [];
+    if (row.owner?.trim() && ownerMatches.length !== 1) {
+      skipped++; errors.push(`Linha ${line}: responsável "${row.owner}" ${ownerMatches.length ? "ambíguo" : "não encontrado"}.`); continue;
+    }
+    const owner = ownerMatches[0];
+    const tags = importTags(row.tags || "");
+    const value = importMoney(row.value || "");
+    if (value === null) {
+      skipped++; errors.push(`Linha ${line}: valor inválido.`); continue;
+    }
+    const expectedClose = importDate(row.expected_close || "");
+    if (expectedClose === "invalid") {
+      skipped++; errors.push(`Linha ${line}: data de fechamento inválida.`); continue;
+    }
+    const lossReason = row.loss_reason?.trim()
+      ? lossReasons.find((reason) => reason.name.toLowerCase() === row.loss_reason.trim().toLowerCase())
+      : undefined;
+    const duplicate = await prisma.opportunity.findFirst({
+      where: { organizationId, contactId: contact.id, pipelineId: pipeline.id, title: { equals: title, mode: "insensitive" } },
+      select: { id: true },
     });
-    await recordStageChange(prisma, { organizationId, opportunityId: newOpp.id, newStageId: stage.id });
+    if (duplicate) {
+      skipped++; errors.push(`Linha ${line}: oportunidade já existe para este contato e pipeline.`); continue;
+    }
+    await syncTags(organizationId, tags);
+
+    try {
+      await prisma.$transaction(async (tx) => {
+        const newOpp = await tx.opportunity.create({
+          data: {
+            organizationId,
+            title,
+            value,
+            tags: JSON.stringify(tags),
+            contactId: contact.id,
+            pipelineId: pipeline.id,
+            stageId: stage.id,
+            ownerId: owner?.id ?? null,
+            expectedClose,
+            lossReason: row.loss_reason?.trim() || null,
+            lossReasonId: lossReason?.id ?? null,
+          },
+        });
+        await recordStageChange(tx, { organizationId, opportunityId: newOpp.id, newStageId: stage.id });
+      });
+    } catch {
+      skipped++; errors.push(`Linha ${line}: não foi possível criar a oportunidade.`); continue;
+    }
     created++;
   }
 
+  if (created) await audit(organizationId, { action: "opportunity.imported", entity: "Opportunity", ...actorOf(user), meta: { created, skipped } });
   revalidatePath("/pipeline");
   return { created, skipped, errors };
 }

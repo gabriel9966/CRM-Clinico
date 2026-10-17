@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { runAutomationById } from "@/lib/automation/engine";
-import { guardWebhook } from "@/lib/webhook-auth";
+import { checkWebhookToken, guardWebhook } from "@/lib/webhook-auth";
 
 // URL própria por automação (gatilho "Webhook recebido"). Qualquer sistema
 // externo (n8n, um formulário, etc.) pode fazer POST aqui com um JSON
@@ -12,6 +12,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ aut
 
   const denied = guardWebhook(req, "automation", automationId);
   if (denied) return denied;
+  // Automações usam sempre a URL gerada no editor; não há webhook legado
+  // a preservar. Sem o token, qualquer pessoa com o id poderia executar o fluxo.
+  if (checkWebhookToken(req, "automation", automationId) !== "ok") {
+    return NextResponse.json({ ok: false, error: "token_required" }, { status: 401 });
+  }
 
   let payload: unknown = null;
   try {

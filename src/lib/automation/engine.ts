@@ -1,6 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
-import { mcpSendMessage } from "@/lib/mcp-tools";
+import { mcpCreateContact, mcpCreateOpportunity, mcpSendMessage } from "@/lib/mcp-tools";
 import { recordStageChange } from "@/lib/pipeline-history";
 import { syncTags } from "@/lib/crm-catalog";
 import { runCode } from "./sandbox";
@@ -29,6 +29,23 @@ function parseTags(raw: string): string[] {
   } catch {
     return [];
   }
+}
+
+function payloadField(payload: unknown, path: string): unknown {
+  if (!path || !/^[a-zA-Z0-9_.]+$/.test(path)) return undefined;
+  let current: unknown = payload;
+  for (const key of path.split(".")) {
+    if (!key || key === "__proto__" || key === "constructor" || key === "prototype" || !current || typeof current !== "object") return undefined;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current;
+}
+
+function resolveTemplate(value: unknown, payload: unknown): string {
+  return String(value ?? "").replace(/\{\{\s*payload\.([a-zA-Z0-9_.]+)\s*\}\}/g, (_, path: string) => {
+    const resolved = payloadField(payload, path);
+    return typeof resolved === "string" || typeof resolved === "number" ? String(resolved) : "";
+  }).trim();
 }
 
 async function appendLog(runId: string, entry: Record<string, unknown>) {
@@ -123,15 +140,43 @@ async function runActionNode(node: Extract<NodeData, { kind: "action" }>, ctx: R
     case "webhook": {
       if (!config.url) return { ok: false, reason: "sem url" };
       try {
-        await fetch(String(config.url), {
+        const response = await fetch(String(config.url), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ contactId: ctx.contactId, opportunityId: ctx.opportunityId, firedAt: new Date().toISOString() }),
         });
-        return { ok: true };
+        return response.ok ? { ok: true } : { ok: false, reason: `webhook retornou HTTP ${response.status}` };
       } catch (err) {
         return { ok: false, reason: err instanceof Error ? err.message : "falha no webhook" };
       }
+    }
+    case "create_contact": {
+      const name = resolveTemplate(config.name, ctx.payload);
+      if (!name) return { ok: false, reason: "nome do contato vazio; confira o campo do payload" };
+      const created = await mcpCreateContact(orgId, {
+        name,
+        email: resolveTemplate(config.email, ctx.payload) || undefined,
+        phone: resolveTemplate(config.phone, ctx.payload) || undefined,
+        company: resolveTemplate(config.company, ctx.payload) || undefined,
+      });
+      ctx.contactId = created.id;
+      return { ok: true, contactId: created.id };
+    }
+    case "create_opportunity": {
+      if (!ctx.contactId) return { ok: false, reason: "sem contato para criar oportunidade" };
+      if (!config.pipelineId || !config.stageId) return { ok: false, reason: "selecione pipeline e etapa" };
+      const title = resolveTemplate(config.title, ctx.payload);
+      if (!title) return { ok: false, reason: "título da oportunidade vazio" };
+      const created = await mcpCreateOpportunity(orgId, {
+        title,
+        contactId: ctx.contactId,
+        pipelineId: String(config.pipelineId),
+        stageId: String(config.stageId),
+        value: Number(config.value ?? 0),
+      });
+      if ("error" in created) return { ok: false, reason: created.error };
+      ctx.opportunityId = created.id;
+      return { ok: true, opportunityId: created.id };
     }
     default:
       return { ok: false, reason: "ação desconhecida" };
@@ -139,14 +184,35 @@ async function runActionNode(node: Extract<NodeData, { kind: "action" }>, ctx: R
 }
 
 async function evaluateCondition(data: Extract<NodeData, { kind: "condition" }>, ctx: RunContext): Promise<boolean> {
-  const { field, operator, value } = data;
+  const { field, operator, value, path } = data;
   const orgId = ctx.organizationId;
+
+  if (field === "payload_field") {
+    const actual = payloadField(ctx.payload, path ?? "");
+    if (operator === "exists") return actual !== undefined && actual !== null && actual !== "";
+    const text = String(actual ?? "");
+    if (operator === "not_equals") return text !== value;
+    if (operator === "contains") return text.includes(value);
+    if (operator === "not_contains") return !text.includes(value);
+    return text === value;
+  }
 
   if (field === "contact_tag") {
     if (!ctx.contactId) return false;
     const c = await prisma.contact.findFirst({ where: { id: ctx.contactId, organizationId: orgId } });
     const tags = c ? parseTags(c.tags) : [];
-    return operator === "not_contains" ? !tags.includes(value) : tags.includes(value);
+    return operator === "not_equals" || operator === "not_contains" ? !tags.includes(value) : tags.includes(value);
+  }
+  if (field === "contact_name" || field === "contact_email" || field === "contact_phone" || field === "contact_company") {
+    if (!ctx.contactId) return false;
+    const contact = await prisma.contact.findFirst({ where: { id: ctx.contactId, organizationId: orgId } });
+    if (!contact) return false;
+    const text = String(({ contact_name: contact.name, contact_email: contact.email, contact_phone: contact.phone, contact_company: contact.company })[field] ?? "");
+    if (operator === "exists") return text.length > 0;
+    if (operator === "not_equals") return text !== value;
+    if (operator === "contains") return text.includes(value);
+    if (operator === "not_contains") return !text.includes(value);
+    return text === value;
   }
   if (field === "opportunity_value") {
     if (!ctx.opportunityId) return false;
@@ -176,6 +242,13 @@ async function executeFrom(flow: Flow, runId: string, startNodeId: string, ctx: 
     if (node.data.kind === "action") {
       const result = await runActionNode(node.data, ctx);
       await appendLog(runId, { nodeId: node.id, label: `Ação: ${node.data.actionType}`, result });
+      if (!result.ok) {
+        await prisma.automationRun.update({ where: { id: runId }, data: { status: "FAILED", finishedAt: new Date() } });
+        return;
+      }
+      if (node.data.actionType === "create_contact" || node.data.actionType === "create_opportunity") {
+        await prisma.automationRun.update({ where: { id: runId }, data: { contactId: ctx.contactId ?? null, opportunityId: ctx.opportunityId ?? null } });
+      }
       const edge = outgoingEdge(flow, node.id);
       nodeId = edge?.target;
       continue;
@@ -204,6 +277,10 @@ async function executeFrom(flow: Flow, runId: string, startNodeId: string, ctx: 
     if (node.data.kind === "code") {
       const outcome = await runCode(node.data.code, ctx);
       await appendLog(runId, { nodeId: node.id, label: "Código JS", result: outcome });
+      if (!outcome.ok) {
+        await prisma.automationRun.update({ where: { id: runId }, data: { status: "FAILED", finishedAt: new Date() } });
+        return;
+      }
       const edge = outgoingEdge(flow, node.id);
       nodeId = edge?.target;
       continue;

@@ -33,6 +33,7 @@ export async function getPipelines(organizationId: string): Promise<PipelineDTO[
   return pipelines.map((p) => ({
     id: p.id,
     name: p.name,
+    group: p.groupName,
     stages: p.stages.map((s) => ({
       id: s.id,
       label: s.label,

@@ -1,9 +1,9 @@
-export type ActionType = "send_message" | "create_task" | "move_stage" | "add_tag" | "assign_owner" | "webhook";
+export type ActionType = "send_message" | "create_task" | "move_stage" | "add_tag" | "assign_owner" | "webhook" | "create_contact" | "create_opportunity";
 
 export type NodeData =
   | { kind: "trigger"; label: string }
   | { kind: "action"; actionType: ActionType; config: Record<string, unknown> }
-  | { kind: "condition"; field: string; operator: string; value: string }
+  | { kind: "condition"; field: string; operator: string; value: string; path?: string }
   | { kind: "delay"; amount: number; unit: "minutes" | "hours" | "days" }
   | { kind: "code"; code: string };
 
@@ -30,6 +30,8 @@ export const ACTION_LABEL: Record<ActionType, string> = {
   add_tag: "Adicionar tag",
   assign_owner: "Atribuir responsável",
   webhook: "Chamar webhook",
+  create_contact: "Criar contato",
+  create_opportunity: "Criar oportunidade",
 };
 
 export const TRIGGER_LABEL: Record<string, string> = {

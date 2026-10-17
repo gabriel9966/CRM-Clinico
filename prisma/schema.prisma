@@ -310,6 +310,7 @@ model Appointment {
 model Pipeline {
   id        String   @id @default(cuid())
   name      String
+  groupName String   @default("Geral")
   createdAt DateTime @default(now())
 
   organizationId String

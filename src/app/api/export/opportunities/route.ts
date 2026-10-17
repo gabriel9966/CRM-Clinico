@@ -27,12 +27,12 @@ export async function GET() {
 
   await audit(organizationId, { action: "opportunity.exported", entity: "Opportunity", ...actorOf(user) });
 
-  const columns = ["title", "value", "contact_name", "contact_email", "pipeline", "stage", "owner", "tags", "expected_close"];
+  const columns = ["title", "value", "contact_name", "contact_email", "contact_phone", "pipeline", "stage", "owner", "tags", "expected_close", "loss_reason"];
   return csvDownload("oportunidades.csv", columns, async (cursor) => {
     // O contato vem junto na mesma consulta (JOIN), sem carregar a base de contatos.
     const rows = await prisma.opportunity.findMany({
       where: { organizationId },
-      include: { contact: { select: { name: true, email: true } } },
+      include: { contact: { select: { name: true, email: true, phone: true } } },
       orderBy: { id: "asc" },
       take: BATCH + 1,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
@@ -45,11 +45,13 @@ export async function GET() {
         value: o.value,
         contact_name: o.contact?.name ?? "",
         contact_email: o.contact?.email ?? "",
+        contact_phone: o.contact?.phone ?? "",
         pipeline: pipelineName(o.pipelineId),
         stage: stageLabel(o.pipelineId, o.stageId),
         owner: ownerName(o.ownerId),
         tags: parseTags(o.tags).join(";"),
         expected_close: o.expectedClose ? o.expectedClose.toISOString().slice(0, 10) : "",
+        loss_reason: o.lossReason ?? "",
       })),
       next: hasMore ? page[page.length - 1].id : null,
     };

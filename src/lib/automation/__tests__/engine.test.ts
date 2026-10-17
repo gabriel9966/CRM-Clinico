@@ -5,10 +5,15 @@ import type { Flow } from "../types";
 const mockPrisma = createMockPrisma();
 
 vi.mock("@/lib/prisma", () => ({ prisma: mockPrisma }));
-vi.mock("@/lib/mcp-tools", () => ({ mcpSendMessage: vi.fn().mockResolvedValue({ ok: true }) }));
+vi.mock("@/lib/mcp-tools", () => ({
+  mcpSendMessage: vi.fn().mockResolvedValue({ ok: true }),
+  mcpCreateContact: vi.fn().mockResolvedValue({ id: "new-contact" }),
+  mcpCreateOpportunity: vi.fn().mockResolvedValue({ id: "new-opportunity" }),
+}));
 vi.mock("../sandbox", () => ({ runCode: vi.fn().mockResolvedValue({ ok: true }) }));
 
 const { runAutomationById } = await import("../engine");
+const { mcpCreateContact, mcpCreateOpportunity } = await import("@/lib/mcp-tools");
 
 const ORG_A = "org-a";
 const ORG_B = "org-b";
@@ -133,11 +138,39 @@ describe("runAutomationById: ações isoladas por organização", () => {
       flow: JSON.stringify(flowWith({ kind: "action", actionType: "send_message", config: { text: "oi" } })),
     };
     mockPrisma.automation.findUnique.mockResolvedValue(automation);
+    mockPrisma.contact.findFirst.mockResolvedValue({ id: "contact-1", organizationId: ORG_A });
 
-    await runAutomationById("auto-4", {});
+    await runAutomationById("auto-4", { contactId: "contact-1" });
 
     expect(mockPrisma.automationRun.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: "COMPLETED" }) })
     );
+  });
+
+  it("marca o run como FAILED quando uma ação não pode ser executada", async () => {
+    mockPrisma.automation.findUnique.mockResolvedValue({
+      id: "auto-5", organizationId: ORG_A, enabled: true, trigger: "WEBHOOK_RECEIVED",
+      flow: JSON.stringify(flowWith({ kind: "action", actionType: "send_message", config: { text: "oi" } })),
+    });
+    await runAutomationById("auto-5", {});
+    expect(mockPrisma.automationRun.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "FAILED" }) })
+    );
+  });
+
+  it("cria contato e oportunidade usando os campos do webhook", async () => {
+    const flow: Flow = {
+      nodes: [
+        { id: "trigger", type: "triggerNode", position: { x: 0, y: 0 }, data: { kind: "trigger", label: "WEBHOOK_RECEIVED" } },
+        { id: "contact", type: "actionNode", position: { x: 1, y: 0 }, data: { kind: "action", actionType: "create_contact", config: { name: "{{payload.name}}", email: "{{payload.email}}" } } },
+        { id: "opportunity", type: "actionNode", position: { x: 2, y: 0 }, data: { kind: "action", actionType: "create_opportunity", config: { title: "Proposta {{payload.name}}", pipelineId: "pipe-1", stageId: "stage-1", value: 1200 } } },
+      ],
+      edges: [{ id: "e1", source: "trigger", target: "contact" }, { id: "e2", source: "contact", target: "opportunity" }],
+    };
+    mockPrisma.automation.findUnique.mockResolvedValue({ id: "auto-6", organizationId: ORG_A, enabled: true, trigger: "WEBHOOK_RECEIVED", flow: JSON.stringify(flow) });
+    await runAutomationById("auto-6", { name: "Maria", email: "maria@exemplo.com" });
+    expect(mcpCreateContact).toHaveBeenCalledWith(ORG_A, expect.objectContaining({ name: "Maria", email: "maria@exemplo.com" }));
+    expect(mcpCreateOpportunity).toHaveBeenCalledWith(ORG_A, expect.objectContaining({ title: "Proposta Maria", contactId: "new-contact" }));
+    expect(mockPrisma.automationRun.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: "COMPLETED" }) }));
   });
 });

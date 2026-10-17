@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toCsv, parseCsv, neutralizeFormula } from "../csv";
+import { toCsv, parseCsv, parseCsvTable, neutralizeFormula } from "../csv";
 
 describe("toCsv", () => {
   it("escapa campos com vírgula, aspas e quebra de linha", () => {
@@ -42,6 +42,16 @@ describe("proteção contra injeção de fórmula em planilhas", () => {
 });
 
 describe("parseCsv", () => {
+  it("aceita CSV do Excel com BOM e ponto e vírgula", () => {
+    expect(parseCsvTable('\uFEFFnome;empresa;nota\nAna;"Loja; Sul";VIP')).toEqual({
+      headers: ["nome", "empresa", "nota"],
+      rows: [{ nome: "Ana", empresa: "Loja; Sul", nota: "VIP" }],
+    });
+  });
+
+  it("rejeita aspas não fechadas", () => {
+    expect(() => parseCsv('name,email\n"Ana,ana@x.com')).toThrow(/aspas não fechadas/);
+  });
   it("ignora linhas em branco", () => {
     expect(parseCsv("name,email\n\nAna,ana@x.com\n\n")).toEqual([{ name: "Ana", email: "ana@x.com" }]);
   });

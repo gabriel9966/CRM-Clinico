@@ -46,6 +46,7 @@ export type StageDTO = {
 export type PipelineDTO = {
   id: string;
   name: string;
+  group: string;
   stages: StageDTO[];
 };
 

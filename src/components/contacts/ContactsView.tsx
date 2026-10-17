@@ -21,7 +21,20 @@ import { createContact, updateContact, deleteContact, importContactsCsv, mergeCo
 import { createSegment, deleteSegment } from "@/app/segments/actions";
 import { fetchContactsPage, fetchContactDetail, fetchDuplicateGroups } from "@/app/listings/actions";
 import { CustomFieldInputs, readCustomFieldValues } from "@/components/shared/CustomFieldInputs";
-import { ImportCsvModal } from "@/components/shared/ImportCsvModal";
+import { ImportCsvModal, type ImportColumn } from "@/components/shared/ImportCsvModal";
+
+const CONTACT_IMPORT_COLUMNS: ImportColumn[] = [
+  { key: "name", label: "Nome", aliases: ["nome completo", "contato", "lead"], required: true },
+  { key: "company", label: "Empresa", aliases: ["organizacao", "organização"] },
+  { key: "email", label: "E-mail", aliases: ["email address"] },
+  { key: "phone", label: "Telefone", aliases: ["celular", "whatsapp", "numero", "número"] },
+  { key: "tags", label: "Tags", aliases: ["etiquetas"] },
+  { key: "notes", label: "Notas", aliases: ["observacoes", "observações"] },
+  { key: "owner", label: "Responsável", aliases: ["atendente", "proprietario", "proprietário"] },
+  { key: "source", label: "Origem", aliases: ["fonte"] },
+  { key: "score", label: "Score", aliases: ["pontuacao", "pontuação"] },
+  { key: "marketing_opt_out", label: "Bloqueio de campanhas", aliases: ["opt_out", "nao_enviar", "não enviar"] },
+];
 
 type Modal =
   | { type: "form"; data: ContactDTO | null }
@@ -387,8 +400,9 @@ export function ContactsView({
       {modal?.type === "import" && (
         <ImportCsvModal
           title="Importar contatos (CSV)"
-          hint="Contatos sem nome são ignorados. O responsável é associado pelo nome exato de um membro da equipe (opcional)."
-          templateColumns="name, company, email, phone, tags, notes, owner"
+          hint="Importe contatos primeiro. Associe as colunas do seu CRM; e-mail/telefone repetidos serão ignorados. Sem informação de consentimento, o contato ficará bloqueado para campanhas."
+          columns={CONTACT_IMPORT_COLUMNS}
+          templateName="modelo-contatos.csv"
           onImport={importContactsCsv}
           onClose={() => setModal(null)}
           onDone={() => {

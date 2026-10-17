@@ -123,11 +123,22 @@ export async function updateTriggerConfig(id: string, triggerConfig: Record<stri
   revalidatePath(`/automations/${id}`);
 }
 
-export async function saveFlow(id: string, flow: Flow) {
+export async function saveFlow(id: string, flow: Flow, trigger: string, triggerConfig: Record<string, unknown>) {
   const user = await requireAdminUser();
   const { organizationId } = user;
-  const updated = await prisma.automation.updateMany({ where: { id, organizationId }, data: { flow: JSON.stringify(flow) } });
-  if (updated.count) await audit(organizationId, { action: "automation.flow_saved", entity: "Automation", entityId: id, ...actorOf(user), meta: { nodes: flow.nodes.length, edges: flow.edges.length } });
+  if (!Object.hasOwn(TRIGGER_LABEL, trigger)) throw new Error("Gatilho inválido");
+  const current = await prisma.automation.findFirst({ where: { id, organizationId }, select: { trigger: true } });
+  if (!current) throw new Error("Automação não encontrada");
+  const updated = await prisma.automation.updateMany({
+    where: { id, organizationId },
+    data: {
+      flow: JSON.stringify(flow),
+      trigger: trigger as never,
+      triggerConfig: JSON.stringify(triggerConfig),
+      ...(current.trigger !== trigger ? { lastTriggeredAt: null } : {}),
+    },
+  });
+  if (updated.count) await audit(organizationId, { action: "automation.flow_saved", entity: "Automation", entityId: id, ...actorOf(user), meta: { nodes: flow.nodes.length, edges: flow.edges.length, trigger, previousTrigger: current.trigger } });
   revalidatePath(`/automations/${id}`);
 }
 

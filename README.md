@@ -9,6 +9,14 @@ CRM multi-empresa (multi-tenant) para clínicas — estética em primeiro lugar,
 - **Catálogos**: etiquetas, motivos de perda, itens/produtos do negócio (valor = soma dos itens).
 - **Lixeira** (restaurável) e **auditoria** (quem fez o quê) — só administradores.
 
+## Migrar dados de outro CRM
+
+Em **Contatos → Importar CSV**, envie o arquivo exportado do CRM anterior, confira a prévia e associe as colunas. O formulário aceita CSV UTF-8 com vírgula ou ponto e vírgula e oferece um modelo para download. Importe os contatos antes das oportunidades.
+
+Depois, em **Pipeline → Importar CSV**, associe os negócios aos contatos por e-mail, telefone ou nome e indique pipeline/etapa pelo nome. Contatos ambíguos, valores ou datas inválidos e oportunidades já existentes são ignorados com indicação da linha. Arquivos de até 20 MB são enviados em lotes; acima disso, divida o CSV.
+
+**Exportar CSV** nas mesmas telas gera toda a base da organização, não apenas a página visível. A exportação de contatos inclui origem, score e bloqueio de campanhas; sem informação explícita de consentimento no arquivo importado, o contato fica bloqueado para campanhas por segurança.
+
 ## Rodando localmente
 
 ```bash

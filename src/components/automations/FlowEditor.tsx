@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
+import { useCallback, useRef, useState, useSyncExternalStore, type DragEvent } from "react";
 import { useRouter } from "next/navigation";
 import {
   ReactFlow,
@@ -23,7 +23,7 @@ import { NODE_TYPES } from "./nodes";
 import type { ActionType, NodeData } from "@/lib/automation/types";
 import { ACTION_LABEL, TRIGGER_LABEL } from "@/lib/automation/types";
 import type { AutomationDTO, PipelineDTO, TeamMemberDTO } from "@/lib/types";
-import { renameAutomation, updateTriggerConfig, saveFlow } from "@/app/automations/actions";
+import { renameAutomation, saveFlow, toggleAutomation } from "@/app/automations/actions";
 
 type PaletteItem =
   | { kind: "action"; actionType: ActionType; label: string }
@@ -38,6 +38,8 @@ const PALETTE: PaletteItem[] = [
   { kind: "action", actionType: "add_tag", label: ACTION_LABEL.add_tag },
   { kind: "action", actionType: "assign_owner", label: ACTION_LABEL.assign_owner },
   { kind: "action", actionType: "webhook", label: ACTION_LABEL.webhook },
+  { kind: "action", actionType: "create_contact", label: ACTION_LABEL.create_contact },
+  { kind: "action", actionType: "create_opportunity", label: ACTION_LABEL.create_opportunity },
   { kind: "condition", label: "Condição" },
   { kind: "delay", label: "Espera" },
   { kind: "code", label: "Código JS" },
@@ -63,7 +65,11 @@ function defaultDataFor(item: PaletteItem): NodeData {
               ? { tag: "", target: "contact" }
               : item.actionType === "assign_owner"
                 ? { ownerId: "", target: "contact" }
-                : { url: "" };
+                : item.actionType === "create_contact"
+                  ? { name: "{{payload.name}}", email: "{{payload.email}}", phone: "{{payload.phone}}", company: "{{payload.company}}" }
+                  : item.actionType === "create_opportunity"
+                    ? { title: "Nova oportunidade", pipelineId: "", stageId: "", value: 0 }
+                    : { url: "" };
     return { kind: "action", actionType: item.actionType, config };
   }
   if (item.kind === "condition") {
@@ -130,21 +136,61 @@ function Editor({
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
   const [selectedId, setSelectedId] = useState<string>("trigger");
   const [name, setName] = useState(automation.name);
+  const [trigger, setTrigger] = useState(automation.trigger);
+  const [savedTrigger, setSavedTrigger] = useState(automation.trigger);
+  const [enabled, setEnabled] = useState(automation.enabled);
+  const [toggling, setToggling] = useState(false);
   const [triggerConfig, setTriggerConfig] = useState<Record<string, unknown>>(automation.triggerConfig);
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const [savedAt, setSavedAt] = useState<Date | null>(null);
+  const origin = useSyncExternalStore(() => () => {}, () => window.location.origin, () => "");
 
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => {
       onNodesChangeRaw(changes.filter((c) => !(c.type === "remove" && "id" in c && c.id === "trigger")));
+      if (changes.some((change) => change.type === "remove" || (change.type === "position" && change.dragging))) setDirty(true);
     },
     [onNodesChangeRaw]
   );
 
+  const handleEdgesChange = useCallback((changes: Parameters<typeof onEdgesChange>[0]) => {
+    onEdgesChange(changes);
+    if (changes.some((change) => change.type === "remove")) setDirty(true);
+  }, [onEdgesChange]);
+
   const onConnect = useCallback(
-    (connection: Connection) => setEdges((eds) => addEdge({ ...connection, id: crypto.randomUUID() }, eds)),
+    (connection: Connection) => {
+      setEdges((eds) => addEdge({ ...connection, id: crypto.randomUUID() }, eds));
+      setDirty(true);
+    },
     [setEdges]
   );
+
+  function addPaletteItem(item: PaletteItem) {
+    const current = nodes.find((node) => node.id === selectedId);
+    const position = current
+      ? { x: current.position.x + 290, y: current.position.y + (edges.some((edge) => edge.source === current.id) ? 155 : 0) }
+      : { x: 320, y: 160 };
+    const id = crypto.randomUUID();
+    const data = defaultDataFor(item);
+    setNodes((existing) => [...existing, { id, type: nodeTypeFor(data.kind), position, data: data as unknown as Record<string, unknown>, deletable: true }]);
+    if (current) {
+      const handle = current.data.kind === "condition" ? "true" : undefined;
+      const outgoing = edges.find((edge) => edge.source === current.id && (handle === undefined || edge.sourceHandle === handle));
+      if (outgoing) {
+        setEdges((existing) => [
+          ...existing.map((edge) => edge.id === outgoing.id ? { ...edge, target: id } : edge),
+          { id: crypto.randomUUID(), source: id, target: outgoing.target },
+        ]);
+      } else {
+        setEdges((existing) => [...existing, { id: crypto.randomUUID(), source: current.id, target: id, sourceHandle: handle }]);
+      }
+    }
+    setSelectedId(id);
+    setDirty(true);
+  }
 
   const onDragStart = (e: DragEvent, item: PaletteItem) => {
     e.dataTransfer.setData("application/x-automation-item", JSON.stringify(item));
@@ -162,6 +208,7 @@ function Editor({
       const data = defaultDataFor(item);
       setNodes((nds) => [...nds, { id, type: nodeTypeFor(data.kind), position, data: data as unknown as Record<string, unknown>, deletable: true }]);
       setSelectedId(id);
+      setDirty(true);
     },
     [screenToFlowPosition, setNodes]
   );
@@ -173,6 +220,7 @@ function Editor({
 
   function updateSelectedData(patch: Partial<NodeData> | Record<string, unknown>) {
     setNodes((nds) => nds.map((n) => (n.id === selectedId ? { ...n, data: { ...n.data, ...patch } } : n)));
+    setDirty(true);
   }
 
   function updateSelectedConfig(patch: Record<string, unknown>) {
@@ -183,6 +231,7 @@ function Editor({
         return { ...n, data: { ...data, config: { ...data.config, ...patch } } as unknown as Record<string, unknown> };
       })
     );
+    setDirty(true);
   }
 
   async function handleSave() {
@@ -190,18 +239,45 @@ function Editor({
     try {
       const flowNodes = nodes.map((n) => ({ id: n.id, type: n.type!, position: n.position, data: n.data as unknown as NodeData }));
       const flowEdges = edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle }));
-      await saveFlow(automation.id, { nodes: flowNodes, edges: flowEdges });
+      await saveFlow(automation.id, { nodes: flowNodes, edges: flowEdges }, trigger, triggerConfig);
       setSavedAt(new Date());
+      setSavedTrigger(trigger);
+      setDirty(false);
+      setSaveError("");
       router.refresh();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Não foi possível salvar o fluxo");
     } finally {
       setSaving(false);
     }
   }
 
-  async function handleTriggerConfigChange(patch: Record<string, unknown>) {
+  function handleTriggerConfigChange(patch: Record<string, unknown>) {
     const next = { ...triggerConfig, ...patch };
     setTriggerConfig(next);
-    await updateTriggerConfig(automation.id, next);
+    setDirty(true);
+  }
+
+  function handleTriggerChange(next: string) {
+    if (next === trigger || !Object.hasOwn(TRIGGER_LABEL, next)) return;
+    setTrigger(next);
+    setTriggerConfig({});
+    setNodes((existing) => existing.map((node) => node.id === "trigger" ? { ...node, data: { kind: "trigger", label: next } } : node));
+    setDirty(true);
+  }
+
+  async function handleToggle() {
+    setToggling(true);
+    try {
+      await toggleAutomation(automation.id, !enabled);
+      setEnabled(!enabled);
+      setSaveError("");
+      router.refresh();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Não foi possível alterar o status");
+    } finally {
+      setToggling(false);
+    }
   }
 
   const selectedNode = nodes.find((n) => n.id === selectedId);
@@ -216,10 +292,13 @@ function Editor({
           onChange={(e) => setName(e.target.value)}
           onBlur={() => renameAutomation(automation.id, name)}
         />
-        <span className="pill" style={{ background: "var(--primary-soft)", color: "var(--primary)" }}>
-          {TRIGGER_LABEL[automation.trigger] ?? automation.trigger}
-        </span>
+        <button className="pill automation-trigger-pill" onClick={() => setSelectedId("trigger")} title="Clique para trocar o gatilho">
+          {TRIGGER_LABEL[trigger] ?? trigger} <span aria-hidden="true">▾</span>
+        </button>
+        <button className={`automation-status-toggle ${enabled ? "is-on" : ""}`} onClick={handleToggle} disabled={toggling} title={enabled ? "Pausar automação" : "Ativar automação"}>{enabled ? "Ativa" : "Pausada"}</button>
         <div style={{ flex: 1 }} />
+        {dirty && <span className="automation-unsaved">Alterações não salvas</span>}
+        {saveError && <span className="form-error" role="alert">{saveError}</span>}
         {savedAt && <span className="muted" style={{ fontSize: 12 }}>Salvo às {savedAt.toLocaleTimeString("pt-BR")}</span>}
         <button className="btn primary small" onClick={handleSave} disabled={saving}>
           {saving ? "Salvando..." : "Salvar fluxo"}
@@ -228,15 +307,16 @@ function Editor({
 
       <div className="automation-shell" style={{ flex: 1, minHeight: 0 }}>
         <div className="automation-palette">
-          <h3>Arraste para o canvas</h3>
+          <h3>Adicione uma etapa</h3>
+          <p className="automation-palette-help">Clique para inserir após o bloco selecionado (na saída “Sim” de condições) ou arraste para posicionar.</p>
           {PALETTE.map((item, i) => (
-            <div key={i} className="palette-item" draggable onDragStart={(e) => onDragStart(e, item)}>
+            <button key={i} type="button" className="palette-item" draggable onDragStart={(e) => onDragStart(e, item)} onClick={() => addPaletteItem(item)}>
               {item.kind === "action" && <Icon.plug />}
               {item.kind === "condition" && <Icon.settings />}
               {item.kind === "delay" && <Icon.up style={{ transform: "rotate(90deg)" }} />}
               {item.kind === "code" && <Icon.zap />}
               {item.label}
-            </div>
+            </button>
           ))}
         </div>
 
@@ -245,7 +325,7 @@ function Editor({
             nodes={nodes}
             edges={edges}
             onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
+            onEdgesChange={handleEdgesChange}
             onConnect={onConnect}
             nodeTypes={NODE_TYPES}
             onNodeClick={(_, node) => setSelectedId(node.id)}
@@ -258,13 +338,16 @@ function Editor({
           </ReactFlow>
         </div>
 
-        <div className="automation-inspector">
+        <div className={`automation-inspector ${selectedNode?.data.kind === "code" ? "is-code" : ""}`}>
           {selectedId === "trigger" || !selectedNode ? (
             <TriggerInspector
-              trigger={automation.trigger}
+              trigger={trigger}
               config={triggerConfig}
               pipelines={pipelines}
-              webhookPath={webhookPath}
+              webhookUrl={origin ? `${origin}${webhookPath}` : webhookPath}
+              webhookReady={savedTrigger === "WEBHOOK_RECEIVED" && trigger === "WEBHOOK_RECEIVED" && enabled && edges.some((edge) => edge.source === "trigger")}
+              webhookNotice={!enabled ? "Ative a automação para receber chamadas." : !edges.some((edge) => edge.source === "trigger") ? "Conecte o gatilho à primeira etapa e salve o fluxo." : "Salve o fluxo com este gatilho para ativar a URL."}
+              onTriggerChange={handleTriggerChange}
               onChange={handleTriggerConfigChange}
             />
           ) : (
@@ -286,38 +369,51 @@ function TriggerInspector({
   trigger,
   config,
   pipelines,
-  webhookPath,
+  webhookUrl,
+  webhookReady,
+  webhookNotice,
+  onTriggerChange,
   onChange,
 }: {
   trigger: string;
   config: Record<string, unknown>;
   pipelines: PipelineDTO[];
-  webhookPath: string;
+  webhookUrl: string;
+  webhookReady: boolean;
+  webhookNotice: string;
+  onTriggerChange: (trigger: string) => void;
   onChange: (patch: Record<string, unknown>) => void;
 }) {
   const selectedPipeline = pipelines.find((p) => p.id === config.pipelineId);
-  const [webhookUrl, setWebhookUrl] = useState("");
-
-  useEffect(() => {
-    setWebhookUrl(`${window.location.origin}${webhookPath}`);
-  }, [webhookPath]);
+  const [copied, setCopied] = useState(false);
 
   return (
     <>
       <h3>Gatilho</h3>
-      <div className="hint">{TRIGGER_LABEL[trigger] ?? trigger}</div>
+      <div className="hint">O evento que inicia esta automação. Você pode trocá-lo a qualquer momento.</div>
+      <div className="field">
+        <label>Quando iniciar o fluxo</label>
+        <select value={trigger} onChange={(event) => onTriggerChange(event.target.value)}>
+          {Object.entries(TRIGGER_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+      </div>
+      <p className="field-help">Ao trocar o gatilho, as etapas conectadas continuam. Revise os campos usados por elas e clique em Salvar fluxo.</p>
 
       {trigger === "WEBHOOK_RECEIVED" && (
-        <>
+        <div className="automation-webhook-box">
+          <strong>Webhook de entrada</strong>
+          <p>Envie um POST com JSON para iniciar este fluxo. O conteúdo recebido vira <code>payload</code>.</p>
+          {!webhookReady && <p className="automation-webhook-warning">{webhookNotice}</p>}
           <div className="field">
-            <label>URL do webhook (POST)</label>
+            <label>URL gerada para esta automação</label>
             <input readOnly value={webhookUrl} onFocus={(e) => e.target.select()} />
           </div>
-          <p className="muted" style={{ fontSize: 11 }}>
-            Qualquer sistema externo (n8n, um formulário, etc.) pode enviar um POST com JSON pra essa URL. O corpo
-            fica disponível como <code>payload</code> no nó de Código.
-          </p>
-        </>
+          <button className="btn small" type="button" onClick={async () => { await navigator.clipboard.writeText(webhookUrl); setCopied(true); }} disabled={!webhookReady || !webhookUrl.startsWith("http")}>
+            {copied ? "URL copiada" : "Copiar URL"}
+          </button>
+          <details className="automation-reference"><summary>Exemplo de envio</summary><pre>{`POST ${webhookUrl}\nContent-Type: application/json\n\n{"name":"Maria","email":"maria@empresa.com"}`}</pre></details>
+          <p className="field-help">A URL contém um token de acesso. Compartilhe apenas com o sistema que vai enviar os dados.</p>
+        </div>
       )}
 
       {trigger === "STAGE_CHANGED" && (
@@ -495,10 +591,47 @@ function NodeInspector({
         )}
 
         {data.actionType === "webhook" && (
-          <div className="field">
-            <label>URL</label>
-            <input defaultValue={String(config.url ?? "")} onBlur={(e) => onChangeConfig({ url: e.target.value })} placeholder="https://..." />
-          </div>
+          <>
+            <div className="field">
+              <label>URL de destino (POST)</label>
+              <input defaultValue={String(config.url ?? "")} onBlur={(e) => onChangeConfig({ url: e.target.value })} placeholder="https://..." />
+            </div>
+            <p className="field-help">Esta etapa envia dados para outro sistema. Para receber dados e iniciar o fluxo, selecione “Webhook recebido” no gatilho.</p>
+          </>
+        )}
+
+        {data.actionType === "create_contact" && (
+          <>
+            <p className="field-help">Cria um novo contato. Use campos do webhook como <code>{"{{payload.name}}"}</code>. O contato criado fica disponível para as próximas etapas.</p>
+            {(["name", "email", "phone", "company"] as const).map((field) => (
+              <div className="field" key={field}>
+                <label>{({ name: "Nome *", email: "E-mail", phone: "Telefone", company: "Empresa" })[field]}</label>
+                <input value={String(config[field] ?? "")} onChange={(e) => onChangeConfig({ [field]: e.target.value })} placeholder={field === "name" ? "{{payload.name}}" : `{{payload.${field}}}`} />
+              </div>
+            ))}
+          </>
+        )}
+
+        {data.actionType === "create_opportunity" && (
+          <>
+            <p className="field-help">Precisa de um contato no contexto: informe <code>contactId</code> no webhook ou conecte antes uma etapa “Criar contato”.</p>
+            <div className="field"><label>Título *</label><input value={String(config.title ?? "")} onChange={(e) => onChangeConfig({ title: e.target.value })} /></div>
+            <div className="field">
+              <label>Pipeline *</label>
+              <select value={String(config.pipelineId ?? "")} onChange={(e) => onChangeConfig({ pipelineId: e.target.value, stageId: "" })}>
+                <option value="">Selecione...</option>
+                {pipelines.map((pipeline) => <option key={pipeline.id} value={pipeline.id}>{pipeline.name}</option>)}
+              </select>
+            </div>
+            <div className="field">
+              <label>Etapa inicial *</label>
+              <select value={String(config.stageId ?? "")} onChange={(e) => onChangeConfig({ stageId: e.target.value })}>
+                <option value="">Selecione...</option>
+                {pipelines.find((pipeline) => pipeline.id === config.pipelineId)?.stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.label}</option>)}
+              </select>
+            </div>
+            <div className="field"><label>Valor (R$)</label><input type="number" min={0} step="0.01" value={Number(config.value ?? 0)} onChange={(e) => onChangeConfig({ value: Number(e.target.value) })} /></div>
+          </>
         )}
       </>
     );
@@ -511,12 +644,18 @@ function NodeInspector({
         <div className="hint">Se verdadeiro segue por &quot;Sim&quot;, senão por &quot;Não&quot;</div>
         <div className="field">
           <label>Campo</label>
-          <select value={data.field} onChange={(e) => onChangeData({ field: e.target.value })}>
+          <select value={data.field} onChange={(e) => onChangeData({ field: e.target.value, operator: "equals" })}>
             <option value="contact_tag">Tag do contato</option>
+            <option value="contact_name">Nome do contato</option>
+            <option value="contact_email">E-mail do contato</option>
+            <option value="contact_phone">Telefone do contato</option>
+            <option value="contact_company">Empresa do contato</option>
             <option value="opportunity_value">Valor da oportunidade</option>
             <option value="stage_label">Nome da etapa atual</option>
+            <option value="payload_field">Campo do webhook</option>
           </select>
         </div>
+        {data.field === "payload_field" && <div className="field"><label>Caminho no JSON recebido</label><input value={data.path ?? ""} onChange={(e) => onChangeData({ path: e.target.value })} placeholder="cliente.email" /><span className="field-help">Exemplo: <code>cliente.email</code> lê <code>{'{"cliente":{"email":"..."}}'}</code>.</span></div>}
         <div className="field">
           <label>Operador</label>
           <select value={data.operator} onChange={(e) => onChangeData({ operator: e.target.value })}>
@@ -526,48 +665,32 @@ function NodeInspector({
                 <option value="gt">é maior que</option>
                 <option value="lt">é menor que</option>
               </>
+            ) : data.field === "contact_tag" || data.field === "stage_label" ? (
+              <>
+                <option value="equals">é igual a</option>
+                <option value="not_equals">é diferente de</option>
+              </>
             ) : (
               <>
-                <option value="equals">é igual a / contém</option>
-                <option value="not_equals">é diferente de / não contém</option>
+                <option value="equals">é igual a</option>
+                <option value="not_equals">é diferente de</option>
+                <option value="contains">contém</option>
+                <option value="not_contains">não contém</option>
+                <option value="exists">está preenchido</option>
               </>
             )}
           </select>
         </div>
-        <div className="field">
+        {data.operator !== "exists" && <div className="field">
           <label>Valor</label>
-          <input defaultValue={data.value} onBlur={(e) => onChangeData({ value: e.target.value })} />
-        </div>
+          <input value={data.value} onChange={(e) => onChangeData({ value: e.target.value })} />
+        </div>}
       </>
     );
   }
 
   if (data.kind === "code") {
-    return (
-      <>
-        <h3>Código JS</h3>
-        <div className="hint">Roda no servidor quando o fluxo chega aqui</div>
-        <div className="code-hint">
-          Disponíveis: <code>payload</code>, <code>contact</code>, <code>opportunity</code> e:
-          <br /><code>crm.sendMessage(texto, contactId?)</code>
-          <br /><code>crm.addTag(tag, &quot;contact&quot;|&quot;opportunity&quot;, id?)</code>
-          <br /><code>crm.createTask(titulo, {`{dueInDays, notes}`})</code>
-          <br /><code>crm.moveOpportunityStage(oppId, stageId)</code>
-          <br /><code>crm.createContact(dados)</code> · <code>crm.getContact(id)</code>
-          <br /><code>crm.listContacts(busca?)</code> · <code>crm.listOpportunities(filtro?)</code>
-          <br /><code>crm.listPipelines()</code> · <code>crm.listTeam()</code>
-          <br /><code>crm.log(...)</code> — aparece no histórico de execução
-        </div>
-        <div className="field">
-          <textarea
-            className="code-textarea"
-            defaultValue={data.code}
-            onBlur={(e) => onChangeData({ code: e.target.value })}
-            spellCheck={false}
-          />
-        </div>
-      </>
-    );
+    return <CodeInspector code={data.code} onChange={(code) => onChangeData({ code })} />;
   }
 
   if (data.kind === "delay") {
@@ -594,4 +717,59 @@ function NodeInspector({
   }
 
   return null;
+}
+
+function CodeInspector({ code, onChange }: { code: string; onChange: (code: string) => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const editor = (large: boolean) => (
+    <textarea
+      className={`code-textarea ${large ? "is-expanded" : ""}`}
+      aria-label="Código JavaScript da automação"
+      value={code}
+      onChange={(event) => onChange(event.target.value)}
+      spellCheck={false}
+      placeholder={'crm.log("Fluxo iniciado", payload);'}
+    />
+  );
+
+  return (
+    <>
+      <h3>Código JS</h3>
+      <div className="hint">Etapa avançada: executa JavaScript no servidor quando o fluxo chega aqui.</div>
+      <div className="automation-code-intro"><strong>O que são as funções <code>crm.*</code>?</strong><p>São funções prontas do próprio CRM para consultar dados ou realizar ações. Use <code>await</code> quando chamar uma delas. <code>payload</code> contém o JSON do webhook; <code>contact</code> e <code>opportunity</code> representam os registros vinculados à execução.</p></div>
+      <div className="automation-code-tools">
+        <button type="button" className="btn small" onClick={() => setExpanded(true)}>Abrir editor ampliado</button>
+      </div>
+      <div className="field">{editor(false)}</div>
+      <details className="automation-reference">
+        <summary>Ver funções e exemplos do CRM</summary>
+        <p>Comunicação e tarefas</p>
+        <code>{'await crm.sendMessage("Olá!")'}</code>
+        <code>{'await crm.createTask("Retornar ligação", { dueInDays: 1 })'}</code>
+        <p>Contatos e negócios</p>
+        <code>{'await crm.addTag("Qualificado", "contact")'}</code>
+        <code>{'await crm.createContact({ name: "Maria" })'}</code>
+        <code>await crm.getContact(contact.id)</code>
+        <code>{'await crm.listContacts("Maria")'}</code>
+        <code>await crm.listOpportunities()</code>
+        <code>await crm.listPipelines()</code>
+        <code>await crm.listTeam()</code>
+        <code>{'await crm.moveOpportunityStage(opportunity.id, "id-da-etapa")'}</code>
+        <code>{'await crm.createOpportunity({ title: "Proposta", contactId: contact.id, pipelineId: "...", stageId: "..." })'}</code>
+        <p>Diagnóstico</p>
+        <code>{'crm.log("Dados recebidos", payload)'}</code>
+        <span>O log aparece no histórico de execuções da automação.</span>
+      </details>
+      <p className="field-help">O código não precisa de <code>import</code>. Salve o fluxo depois de editar. Use apenas código confiável: esta etapa roda no servidor.</p>
+      {expanded && (
+        <div className="modal-overlay automation-code-overlay" onClick={() => setExpanded(false)}>
+          <div className="automation-code-dialog" role="dialog" aria-modal="true" aria-label="Editor de código JavaScript" onClick={(event) => event.stopPropagation()}>
+            <div className="automation-code-dialog-head"><div><h2>Código JS</h2><p>Use <code>payload</code>, <code>contact</code>, <code>opportunity</code> e as funções <code>crm.*</code>.</p></div><button className="btn small" onClick={() => setExpanded(false)}>Concluir edição</button></div>
+            {editor(true)}
+            <div className="automation-code-dialog-foot">As alterações ficam no editor até você clicar em “Salvar fluxo”.</div>
+          </div>
+        </div>
+      )}
+    </>
+  );
 }

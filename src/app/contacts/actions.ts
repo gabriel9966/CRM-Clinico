@@ -5,7 +5,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireOrgUser } from "@/lib/auth";
 import { triggerAutomations } from "@/lib/automation/engine";
-import { parseCsv } from "@/lib/csv";
+import { importOptOut, importRows, importTags, phoneKey } from "@/lib/crm-import";
 import { actorOf, audit } from "@/lib/audit";
 import { syncTags } from "@/lib/crm-catalog";
 import { softDeleteContacts } from "@/lib/soft-delete";
@@ -223,9 +223,30 @@ export type ImportSummary = { created: number; skipped: number; errors: string[]
 // "name" são puladas. "owner" é resolvido por nome dentro da própria
 // organização — nunca cria nem reatribui pra fora dela.
 export async function importContactsCsv(csvText: string): Promise<ImportSummary> {
-  const { organizationId } = await requireOrgUser();
-  const rows = parseCsv(csvText);
+  const user = await requireOrgUser();
+  const { organizationId } = user;
+  const rows = importRows(csvText, ["name"]);
   const team = await prisma.user.findMany({ where: { organizationId }, select: { id: true, name: true } });
+  const emails = [...new Set(rows.map((row) => row.email?.trim().toLowerCase()).filter(Boolean))];
+  const phones = [...new Set(rows.map((row) => row.phone?.trim()).filter(Boolean))];
+  const existingEmails = new Set<string>();
+  const existingPhones = new Set<string>();
+  for (let i = 0; i < Math.max(emails.length, phones.length); i += 200) {
+    const matches = await prisma.contact.findMany({
+      where: {
+        organizationId,
+        OR: [
+          ...emails.slice(i, i + 200).map((email) => ({ email: { equals: email, mode: "insensitive" as const } })),
+          ...phones.slice(i, i + 200).map((phone) => ({ phone })),
+        ],
+      },
+      select: { email: true, phone: true },
+    });
+    for (const contact of matches) {
+      if (contact.email) existingEmails.add(contact.email.toLowerCase());
+      if (contact.phone) existingPhones.add(phoneKey(contact.phone));
+    }
+  }
 
   let created = 0;
   let skipped = 0;
@@ -239,26 +260,58 @@ export async function importContactsCsv(csvText: string): Promise<ImportSummary>
       errors.push(`Linha ${i + 2}: sem nome, pulada.`);
       continue;
     }
-    const owner = row.owner ? team.find((m) => m.name.toLowerCase() === row.owner.toLowerCase()) : undefined;
-    const tags = (row.tags || "").split(";").map((t) => t.trim()).filter(Boolean);
+    const email = (row.email || "").trim().toLowerCase();
+    const phone = (row.phone || "").trim();
+    const normalizedPhone = phoneKey(phone);
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      skipped++; errors.push(`Linha ${i + 2}: e-mail inválido.`); continue;
+    }
+    if ((email && existingEmails.has(email)) || (normalizedPhone && existingPhones.has(normalizedPhone))) {
+      skipped++; errors.push(`Linha ${i + 2}: contato já existe (e-mail ou telefone).`); continue;
+    }
+    const score = row.score?.trim() ? Number(row.score) : 0;
+    if (!Number.isInteger(score) || score < 0 || score > 100) {
+      skipped++; errors.push(`Linha ${i + 2}: score deve estar entre 0 e 100.`); continue;
+    }
+    const marketingOptOut = importOptOut(row.marketing_opt_out || "");
+    if (marketingOptOut === "invalid") {
+      skipped++; errors.push(`Linha ${i + 2}: bloqueio de campanhas inválido (use sim/não).`); continue;
+    }
+    const ownerMatches = row.owner?.trim() ? team.filter((m) => m.name.toLowerCase() === row.owner.trim().toLowerCase()) : [];
+    if (row.owner?.trim() && ownerMatches.length !== 1) {
+      skipped++; errors.push(`Linha ${i + 2}: responsável "${row.owner}" ${ownerMatches.length ? "ambíguo" : "não encontrado"}.`); continue;
+    }
+    const owner = ownerMatches[0];
+    const tags = importTags(row.tags || "");
     tags.forEach((t) => importedTags.add(t));
 
-    await prisma.contact.create({
-      data: {
-        organizationId,
-        name,
-        company: row.company || null,
-        email: row.email || null,
-        phone: row.phone || null,
-        tags: JSON.stringify(tags),
-        notes: row.notes || null,
-        ownerId: owner?.id ?? null,
-      },
-    });
+    try {
+      await prisma.contact.create({
+        data: {
+          organizationId,
+          name,
+          company: row.company || null,
+          email: email || null,
+          phone: phone || null,
+          tags: JSON.stringify(tags),
+          notes: row.notes || null,
+          source: row.source || null,
+          score,
+          marketingOptOut,
+          marketingOptOutAt: marketingOptOut ? new Date() : null,
+          ownerId: owner?.id ?? null,
+        },
+      });
+    } catch {
+      skipped++; errors.push(`Linha ${i + 2}: não foi possível criar o contato.`); continue;
+    }
+    if (email) existingEmails.add(email);
+    if (normalizedPhone) existingPhones.add(normalizedPhone);
     created++;
   }
 
   await syncTags(organizationId, [...importedTags]);
+  if (created) await audit(organizationId, { action: "contact.imported", entity: "Contact", ...actorOf(user), meta: { created, skipped } });
   revalidatePath("/contacts");
   revalidatePath("/pipeline");
   return { created, skipped, errors };
