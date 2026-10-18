@@ -37,6 +37,8 @@ export type StageDTO = {
   label: string;
   color: string;
   order: number;
+  /** Status operacional; não depende do nome que aparece no funil. */
+  status: "OPEN" | "WON" | "LOST";
   pipelineId: string;
   requiredFields: string[];
   allowedTeams: string[];
@@ -128,6 +130,8 @@ export type ActivityDTO = {
   type: "TASK" | "CALL" | "MEETING";
   title: string;
   notes: string | null;
+  tags: string[];
+  collaboratorIds: string[];
   dueAt: string;
   done: boolean;
   createdAt: string;

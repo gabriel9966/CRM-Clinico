@@ -42,14 +42,12 @@ export function DashboardView({
   data: DashboardData;
   team: TeamMemberDTO[];
 }) {
-  // Classify every stage across every pipeline as won / lost / open,
-  // using the seeded label convention (see known limitation in README).
+  // O status operacional é configurado na etapa; o nome exibido pode ser livre.
   const stageKind = useMemo(() => {
     const map = new Map<string, "won" | "lost" | "open">();
     for (const p of pipelines) {
       for (const s of p.stages) {
-        const label = s.label.trim().toLowerCase();
-        map.set(s.id, label === "ganho" ? "won" : label === "perdido" ? "lost" : "open");
+        map.set(s.id, s.status.toLowerCase() as "won" | "lost" | "open");
       }
     }
     return map;

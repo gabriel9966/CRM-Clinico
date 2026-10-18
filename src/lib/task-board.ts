@@ -20,7 +20,15 @@ export type TaskListDTO = {
   cards: TaskCardDTO[];
 };
 
-export type TaskBoardFilter = { assigneeId?: string; search?: string };
+export type TaskBoardFilter = {
+  assigneeId?: string;
+  /** Inclui tarefas em que a pessoa é responsável ou participante. */
+  participantId?: string;
+  search?: string;
+  tag?: string;
+  overdue?: boolean;
+  unassigned?: boolean;
+};
 
 type ListRow = { id: string; name: string; order: number; isDone: boolean };
 
@@ -52,11 +60,29 @@ export function listWhere(list: ListRow, all: ListRow[]): Prisma.ActivityWhereIn
 
 function filterWhere(organizationId: string, filter: TaskBoardFilter): Prisma.ActivityWhereInput {
   const search = filter.search?.trim().slice(0, 100);
-  return {
-    organizationId,
-    ...(filter.assigneeId ? { assigneeId: filter.assigneeId } : {}),
-    ...(search ? { title: { contains: search, mode: "insensitive" as const } } : {}),
-  };
+  const clauses: Prisma.ActivityWhereInput[] = [{ organizationId }];
+  if (filter.participantId) {
+    clauses.push({ OR: [{ assigneeId: filter.participantId }, { collaboratorIds: { contains: JSON.stringify(filter.participantId) } }] });
+  } else if (filter.assigneeId) clauses.push({ assigneeId: filter.assigneeId });
+  if (filter.unassigned) clauses.push({ assigneeId: null });
+  if (filter.overdue) clauses.push({ done: false, dueAt: { lt: new Date() } });
+  if (filter.tag) clauses.push({ tags: { contains: JSON.stringify(filter.tag) } });
+  if (search) {
+    clauses.push({ OR: [
+        { title: { contains: search, mode: "insensitive" as const } },
+        { notes: { contains: search, mode: "insensitive" as const } },
+        { contact: { name: { contains: search, mode: "insensitive" as const } } },
+        { opportunity: { title: { contains: search, mode: "insensitive" as const } } },
+      ] });
+  }
+  return { AND: clauses };
+}
+
+function stringList(raw: string): string[] {
+  try {
+    const value: unknown = JSON.parse(raw);
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  } catch { return []; }
 }
 
 const CARD_ORDER: Prisma.ActivityOrderByWithRelationInput[] = [{ position: "asc" }, { dueAt: "asc" }, { id: "asc" }];
@@ -71,6 +97,8 @@ function toCard(
     type: a.type,
     title: a.title,
     notes: a.notes,
+    tags: stringList(a.tags),
+    collaboratorIds: stringList(a.collaboratorIds),
     dueAt: a.dueAt.toISOString(),
     done: a.done,
     createdAt: a.createdAt.toISOString(),

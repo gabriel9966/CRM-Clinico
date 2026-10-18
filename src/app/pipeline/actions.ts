@@ -51,12 +51,12 @@ export async function getOpportunityStageHistory(opportunityId: string): Promise
 }
 
 const DEFAULT_STAGES = [
-  { label: "Novo Lead", color: "#64748b" },
-  { label: "Contato Feito", color: "#2563eb" },
-  { label: "Proposta Enviada", color: "#7c3aed" },
-  { label: "Negociação", color: "#ea580c" },
-  { label: "Ganho", color: "#16a34a" },
-  { label: "Perdido", color: "#dc2626" },
+  { label: "Novo Lead", color: "#64748b", status: "OPEN" as const },
+  { label: "Contato Feito", color: "#2563eb", status: "OPEN" as const },
+  { label: "Proposta Enviada", color: "#7c3aed", status: "OPEN" as const },
+  { label: "Negociação", color: "#ea580c", status: "OPEN" as const },
+  { label: "Ganho", color: "#16a34a", status: "WON" as const },
+  { label: "Perdido", color: "#dc2626", status: "LOST" as const },
 ];
 
 function cleanGroup(group?: string) {
@@ -80,7 +80,7 @@ export async function createPipeline(name: string, group?: string) {
       name: trimmed,
       groupName: cleanGroup(group),
       stages: {
-        create: DEFAULT_STAGES.map((s, i) => ({ label: s.label, color: s.color, order: i })),
+        create: DEFAULT_STAGES.map((s, i) => ({ label: s.label, color: s.color, status: s.status, order: i })),
       },
     },
   });
@@ -141,11 +141,12 @@ export async function setStageColor(stageId: string, color: string) {
   revalidatePath("/pipeline");
 }
 
-export async function configureStage(stageId: string, input: { requiredFields: string[]; allowedTeams: string[]; requireLossReason: boolean; automationIds: string[] }) {
+export async function configureStage(stageId: string, input: { status: "OPEN" | "WON" | "LOST"; requiredFields: string[]; allowedTeams: string[]; requireLossReason: boolean; automationIds: string[] }) {
   const { organizationId } = await requireAdminUser();
   const stage = await prisma.stage.findFirst({ where: { id: stageId, pipeline: { organizationId } } });
   if (!stage) return;
-  await prisma.stage.update({ where: { id: stageId }, data: { requiredFields: JSON.stringify(input.requiredFields.filter(Boolean)), allowedTeams: JSON.stringify(input.allowedTeams.filter(Boolean)), requireLossReason: input.requireLossReason, automationIds: JSON.stringify(input.automationIds.filter(Boolean)) } });
+  const status = ["OPEN", "WON", "LOST"].includes(input.status) ? input.status : "OPEN";
+  await prisma.stage.update({ where: { id: stageId }, data: { status, requiredFields: JSON.stringify(input.requiredFields.filter(Boolean)), allowedTeams: JSON.stringify(input.allowedTeams.filter(Boolean)), requireLossReason: status === "LOST" ? true : input.requireLossReason, automationIds: JSON.stringify(input.automationIds.filter(Boolean)) } });
   revalidatePath("/pipeline");
 }
 
@@ -226,12 +227,12 @@ async function assertOpportunityRefs(organizationId: string, data: OpportunityIn
 }
 
 async function assertStagePolicy(stageId: string, data: OpportunityInput, user: Awaited<ReturnType<typeof requireOrgUser>>) {
-  const stage = await prisma.stage.findUnique({ where: { id: stageId }, select: { requiredFields: true, allowedTeams: true, requireLossReason: true } });
+  const stage = await prisma.stage.findUnique({ where: { id: stageId }, select: { status: true, requiredFields: true, allowedTeams: true, requireLossReason: true } });
   if (!stage) return;
   const parse = (raw: string) => { try { const v = JSON.parse(raw); return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []; } catch { return []; } };
   const teams = parse(stage.allowedTeams);
   if (user.role !== "ADMIN" && teams.length && !teams.includes(user.team)) throw new Error("Seu time não tem permissão para esta etapa.");
-  if (stage.requireLossReason && !data.lossReasonId) throw new Error("Informe o motivo de perda para mover a oportunidade a esta etapa.");
+  if ((stage.status === "LOST" || stage.requireLossReason) && !data.lossReasonId) throw new Error("Informe o motivo de perda para mover a oportunidade a esta etapa.");
   const missing = parse(stage.requiredFields).filter((field) => {
     if (field === "title") return !data.title.trim();
     if (field === "value") return !Number.isFinite(data.value) || data.value <= 0;
@@ -438,6 +439,15 @@ export async function importOpportunitiesCsv(csvText: string, defaultPipelineId:
     const lossReason = row.loss_reason?.trim()
       ? lossReasons.find((reason) => reason.name.toLowerCase() === row.loss_reason.trim().toLowerCase())
       : undefined;
+    try {
+      await assertStagePolicy(stage.id, {
+        title, value, tags, contactId: contact.id, pipelineId: pipeline.id, stageId: stage.id,
+        ownerId: owner?.id ?? null, expectedClose: expectedClose?.toISOString() ?? null,
+        lossReasonId: lossReason?.id ?? null, customFields: {},
+      }, user);
+    } catch (error) {
+      skipped++; errors.push(`Linha ${line}: ${error instanceof Error ? error.message : "não atende às regras da etapa"}`); continue;
+    }
     const duplicate = await prisma.opportunity.findFirst({
       where: { organizationId, contactId: contact.id, pipelineId: pipeline.id, title: { equals: title, mode: "insensitive" } },
       select: { id: true },
@@ -485,13 +495,13 @@ export async function moveOpportunityStage(id: string, stageId: string) {
   // A etapa de destino precisa ser do mesmo pipeline (e da mesma organização).
   const target = await prisma.stage.findFirst({
     where: { id: stageId, pipelineId: existing.pipelineId, pipeline: { organizationId } },
-    select: { id: true },
+    select: { id: true, status: true },
   });
   if (!target) throw new Error("Etapa inválida para este pipeline.");
 
   await assertStagePolicy(stageId, { title: existing.title, value: existing.value, tags: [], contactId: existing.contactId, pipelineId: existing.pipelineId, stageId, ownerId: existing.ownerId, expectedClose: existing.expectedClose?.toISOString() ?? null, lossReasonId: existing.lossReasonId, customFields: existing.customFields as Record<string, unknown> }, user);
 
-  const opp = await prisma.opportunity.update({ where: { id }, data: { stageId } });
+  const opp = await prisma.opportunity.update({ where: { id }, data: { stageId, ...(target.status === "LOST" ? {} : { lossReasonId: null, lossReason: null }) } });
   await recordStageChange(prisma, { organizationId, opportunityId: opp.id, newStageId: opp.stageId });
   revalidatePath("/pipeline");
   await triggerAutomations(organizationId, "STAGE_CHANGED", {

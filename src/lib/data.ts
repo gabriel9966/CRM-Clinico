@@ -39,6 +39,7 @@ export async function getPipelines(organizationId: string): Promise<PipelineDTO[
       label: s.label,
       color: s.color,
       order: s.order,
+      status: s.status,
       requiredFields: parseTags(s.requiredFields),
       allowedTeams: parseTags(s.allowedTeams),
       requireLossReason: s.requireLossReason,

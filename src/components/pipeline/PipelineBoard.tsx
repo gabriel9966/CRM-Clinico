@@ -189,10 +189,15 @@ export function PipelineBoard({
 
   async function run(fn: () => Promise<void>) {
     setBusy(true);
+    setBoardError(null);
     try {
       await fn();
       setReloadKey((k) => k + 1);
       router.refresh(); // etapas/pipelines podem ter mudado
+      return true;
+    } catch (error) {
+      setBoardError(error instanceof Error ? error.message : "Não foi possível concluir esta ação.");
+      return false;
     } finally {
       setBusy(false);
     }
@@ -204,17 +209,12 @@ export function PipelineBoard({
   }
 
   // ---------- Estatísticas (somadas dos totais de cada etapa, vindos do banco) ----------
-  const kindOf = (label: string) => {
-    const l = label.trim().toLowerCase();
-    return l === "ganho" ? "won" : l === "perdido" ? "lost" : "open";
-  };
   let openCount = 0, openSum = 0, wonCount = 0, wonSum = 0, lostCount = 0;
   for (const s of stages) {
     const col = board[s.id];
     if (!col) continue;
-    const kind = kindOf(s.label);
-    if (kind === "won") { wonCount += col.count; wonSum += col.sum; }
-    else if (kind === "lost") { lostCount += col.count; }
+    if (s.status === "WON") { wonCount += col.count; wonSum += col.sum; }
+    else if (s.status === "LOST") { lostCount += col.count; }
     else { openCount += col.count; openSum += col.sum; }
   }
   const winRate = wonCount + lostCount ? Math.round((wonCount / (wonCount + lostCount)) * 100) : 0;
@@ -248,15 +248,11 @@ export function PipelineBoard({
       customFields: readCustomFieldValues(fd, customFieldDefs, "OPPORTUNITY"),
     };
     const existing = modal.data;
-    try {
-      await run(async () => {
-        if (existing) await updateOpportunity(existing.id, payload);
-        else await createOpportunity(payload);
-      });
-      closeModal();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Não foi possível salvar.");
-    }
+    const saved = await run(async () => {
+      if (existing) await updateOpportunity(existing.id, payload);
+      else await createOpportunity(payload);
+    });
+    if (saved) closeModal();
   }
 
   return (
@@ -460,7 +456,7 @@ export function PipelineBoard({
           onSubmit={submitOpportunity}
           onDelete={
             modal.data
-              ? () => run(() => deleteOpportunity(modal.data!.id)).then(closeModal)
+              ? () => run(() => deleteOpportunity(modal.data!.id)).then((deleted) => { if (deleted) closeModal(); })
               : undefined
           }
         />
@@ -473,8 +469,7 @@ export function PipelineBoard({
           groups={groups}
           defaultGroup={currentGroup}
           onSubmit={async (name, group) => {
-            await run(() => createPipeline(name, group));
-            closeModal();
+            if (await run(() => createPipeline(name, group))) closeModal();
           }}
         />
       )}
@@ -499,7 +494,8 @@ export function PipelineBoard({
           customFieldDefs={customFieldDefs}
           automations={automations}
           onDeletePipeline={() =>
-            run(() => deletePipeline(modal.pipelineId)).then(() => {
+            run(() => deletePipeline(modal.pipelineId)).then((deleted) => {
+              if (!deleted) return;
               setCurrentPipelineId(pipelines.find((p) => p.id !== modal.pipelineId)?.id ?? "");
               closeModal();
             })
@@ -556,6 +552,12 @@ function OpportunityModal({
   const activePipelineId = pendingPipelineId ?? data?.pipelineId ?? defaultPipelineId;
   const activePipeline = pipelines.find((p) => p.id === activePipelineId);
   const stages = activePipeline ? [...activePipeline.stages].sort((a, b) => a.order - b.order) : [];
+  const [selectedStageId, setSelectedStageId] = useState(data?.stageId ?? "");
+  useEffect(() => {
+    setSelectedStageId((current) => stages.some((stage) => stage.id === current) ? current : (stages[0]?.id ?? ""));
+  }, [activePipelineId]);
+  const selectedStage = stages.find((stage) => stage.id === selectedStageId);
+  const requiresLossReason = selectedStage?.status === "LOST" || !!selectedStage?.requireLossReason;
   const [historyData, setHistoryData] = useState<{ opportunityId: string; items: OpportunityStageHistoryDTO[] } | null>(null);
   const [historyNow, setHistoryNow] = useState(0);
   const opportunityId = data?.id;
@@ -673,7 +675,7 @@ function OpportunityModal({
               </div>
               <div className="field">
                 <label>Estágio</label>
-                <select name="stageId" defaultValue={data?.stageId}>
+                <select name="stageId" value={selectedStageId} onChange={(event) => setSelectedStageId(event.target.value)}>
                   {stages.map((s) => (
                     <option key={s.id} value={s.id}>{s.label}</option>
                   ))}
@@ -695,16 +697,18 @@ function OpportunityModal({
                 <input name="expectedClose" type="date" defaultValue={data?.expectedClose?.slice(0, 10) ?? ""} />
               </div>
             </div>
-            {lossReasons.length > 0 && (
+            {requiresLossReason && lossReasons.length > 0 && (
               <div className="field">
-                <label>Motivo de perda</label>
-                <select name="lossReasonId" defaultValue={lossReasons.find((reason) => reason.name === data?.lossReason)?.id ?? ""}>
-                  <option value="">Não se aplica / negócio em aberto</option>
+                <label>Motivo de perda *</label>
+                <select name="lossReasonId" required defaultValue={lossReasons.find((reason) => reason.name === data?.lossReason)?.id ?? ""}>
+                  <option value="">Selecione o motivo</option>
                   {lossReasons.map((reason) => <option key={reason.id} value={reason.id}>{reason.name}</option>)}
                 </select>
-                <div className="field-help">Use ao marcar a oportunidade como perdida para manter o relatório comercial confiável.</div>
+                <div className="field-help">Esta etapa exige motivo de perda para manter o relatório comercial confiável.</div>
               </div>
             )}
+            {requiresLossReason && lossReasons.length === 0 && <div className="form-error">Cadastre ao menos um motivo de perda ativo antes de usar esta etapa.</div>}
+            {!requiresLossReason && <input type="hidden" name="lossReasonId" value="" />}
             <CustomFieldInputs definitions={customFieldDefs} entity="OPPORTUNITY" values={data?.customFields ?? {}} />
           </div>
           <div className="modal-foot">
@@ -715,7 +719,7 @@ function OpportunityModal({
             )}
             <div style={{ flex: 1 }} />
             <button type="button" className="btn" onClick={onClose}>Cancelar</button>
-            <button type="submit" className="btn primary" disabled={busy}>
+            <button type="submit" className="btn primary" disabled={busy || (requiresLossReason && lossReasons.length === 0)}>
               {editing ? "Salvar" : "Criar oportunidade"}
             </button>
           </div>
@@ -827,7 +831,7 @@ function PipelineManageModal({
   onSetColor: (stageId: string, color: string) => void;
   onMoveStage: (stageId: string, dir: -1 | 1) => void;
   onDeleteStage: (stageId: string) => void;
-  onConfigureStage: (stageId: string, input: { requiredFields: string[]; allowedTeams: string[]; requireLossReason: boolean; automationIds: string[] }) => void;
+  onConfigureStage: (stageId: string, input: { status: "OPEN" | "WON" | "LOST"; requiredFields: string[]; allowedTeams: string[]; requireLossReason: boolean; automationIds: string[] }) => void;
   team: TeamMemberDTO[];
   customFieldDefs: CustomFieldDefinitionDTO[];
   automations: { id: string; name: string; enabled: boolean }[];
@@ -975,8 +979,9 @@ function StageConfigurationModal({
   automations: { id: string; name: string; enabled: boolean }[];
   busy: boolean;
   onClose: () => void;
-  onSave: (input: { requiredFields: string[]; allowedTeams: string[]; requireLossReason: boolean; automationIds: string[] }) => void;
+  onSave: (input: { status: "OPEN" | "WON" | "LOST"; requiredFields: string[]; allowedTeams: string[]; requireLossReason: boolean; automationIds: string[] }) => void;
 }) {
+  const [status, setStatus] = useState(stage.status);
   const [requiredFields, setRequiredFields] = useState(stage.requiredFields);
   const [allowedTeams, setAllowedTeams] = useState(stage.allowedTeams);
   const [requireLossReason, setRequireLossReason] = useState(stage.requireLossReason);
@@ -994,6 +999,11 @@ function StageConfigurationModal({
         <div className="modal-head"><div><h2>Configurar etapa</h2><p className="muted">{stage.label} · regras aplicadas quando um negócio entra nesta etapa.</p></div><button className="close-x" onClick={onClose}><Icon.close /></button></div>
         <div className="modal-body stage-config-body">
           <section className="stage-rule-section">
+            <h3>Status da etapa</h3><p>Define como esta etapa entra em métricas, conversão e encerramento do negócio.</p>
+            <label className="field"><span>Resultado do negócio</span><select value={status} onChange={(event) => setStatus(event.target.value as "OPEN" | "WON" | "LOST")}><option value="OPEN">Em aberto</option><option value="WON">Ganha</option><option value="LOST">Perdida</option></select></label>
+            {status === "LOST" && <p className="stage-rule-hint">Negócios perdidos sempre exigem um motivo de perda válido.</p>}
+          </section>
+          <section className="stage-rule-section">
             <h3>Campos obrigatórios</h3><p>O card só poderá ser movido quando todos os campos selecionados estiverem preenchidos.</p>
             <div className="stage-rule-options">{availableFields.map(([key, label]) => <label key={key}><input type="checkbox" checked={requiredFields.includes(key)} onChange={() => toggle(key, requiredFields, setRequiredFields)} />{label}</label>)}</div>
           </section>
@@ -1001,13 +1011,13 @@ function StageConfigurationModal({
             <h3>Quem pode mover para esta etapa</h3><p>Sem seleção, qualquer equipe com acesso ao pipeline pode mover cards.</p>
             <div className="stage-rule-options">{teams.length ? teams.map((team) => <label key={team}><input type="checkbox" checked={allowedTeams.includes(team)} onChange={() => toggle(team, allowedTeams, setAllowedTeams)} />{team}</label>) : <span className="muted">Nenhuma equipe cadastrada.</span>}</div>
           </section>
-          <section className="stage-rule-section compact"><label className="stage-rule-switch"><input type="checkbox" checked={requireLossReason} onChange={(event) => setRequireLossReason(event.target.checked)} /><span><strong>Exigir motivo de perda</strong><small>Use normalmente apenas na etapa “Perdido”.</small></span></label></section>
+          {status !== "LOST" && <section className="stage-rule-section compact"><label className="stage-rule-switch"><input type="checkbox" checked={requireLossReason} onChange={(event) => setRequireLossReason(event.target.checked)} /><span><strong>Exigir motivo de perda</strong><small>Ative apenas se esta etapa representar uma perda mesmo sem encerrá-la.</small></span></label></section>}
           <section className="stage-rule-section">
             <h3>Automações relacionadas</h3><p>Registre quais automações devem ser revisadas para esta etapa. A execução do gatilho “Mudança de etapa” continua configurada na própria automação.</p>
             <div className="stage-rule-options">{automations.length ? automations.map((automation) => <label key={automation.id}><input type="checkbox" checked={automationIds.includes(automation.id)} onChange={() => toggle(automation.id, automationIds, setAutomationIds)} />{automation.name}{!automation.enabled && <small> pausada</small>}</label>) : <span className="muted">Nenhuma automação cadastrada.</span>}</div>
           </section>
         </div>
-        <div className="modal-foot"><button className="btn" onClick={onClose}>Cancelar</button><div style={{ flex: 1 }} /><button className="btn primary" disabled={busy} onClick={() => onSave({ requiredFields, allowedTeams, requireLossReason, automationIds })}>Salvar configuração</button></div>
+        <div className="modal-foot"><button className="btn" onClick={onClose}>Cancelar</button><div style={{ flex: 1 }} /><button className="btn primary" disabled={busy} onClick={() => onSave({ status, requiredFields, allowedTeams, requireLossReason, automationIds })}>Salvar configuração</button></div>
       </div>
     </div>
   );

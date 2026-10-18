@@ -19,7 +19,7 @@ import type {
   SendOptionDTO,
   TeamMemberDTO,
 } from "@/lib/types";
-import { addPrivateNote, assignConversation, fetchConversationEvents, fetchConversationSendOptions, fetchPrivateNotes, retryFailedMessage, sendMessage, setConversationStatus, updateConversationTags, type PrivateNoteDTO } from "@/app/conversations/actions";
+import { addPrivateNote, assignConversation, fetchConversationEvents, fetchConversationSendOptions, fetchPrivateNotes, linkConversationChannel, retryFailedMessage, sendMessage, setConversationStatus, updateConversationTags, type PrivateNoteDTO } from "@/app/conversations/actions";
 import { fetchContactDetail, fetchConversationThread, fetchConversations } from "@/app/listings/actions";
 import { createMessageTemplate, deleteMessageTemplate } from "@/app/templates/actions";
 import { createActivity, type ActivityInput } from "@/app/activities/actions";
@@ -123,6 +123,7 @@ export function ConversationsView({
   const [chosenConnection, setChosenConnection] = useState<string>("");
   const [sendError, setSendError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [linkingChannel, setLinkingChannel] = useState(false);
   const [windowNow, setWindowNow] = useState(() => Date.now());
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [manageTemplatesOpen, setManageTemplatesOpen] = useState(false);
@@ -183,6 +184,29 @@ export function ConversationsView({
     setRows((prev) => prev.map((row) => row.id === activeRow.id ? { ...row, status } : row));
     setSelectedSnapshot((row) => row?.id === activeRow.id ? { ...row, status } : row);
     router.refresh();
+  }
+
+  async function chooseConversationChannel(connectionId: string) {
+    if (!activeRow || !connectionId || linkingChannel) return;
+    setLinkingChannel(true);
+    setSendError(null);
+    try {
+      const result = await linkConversationChannel(activeRow.id, connectionId);
+      if (!result.ok) {
+        setSendError(result.error);
+        return;
+      }
+      const option = sendOptions.find((item) => item.connectionId === connectionId);
+      if (!option) return;
+      const channel = { connectionId, provider: option.provider, label: option.label, externalName: null };
+      setRows((items) => items.map((item) => item.id === activeRow.id ? { ...item, channel } : item));
+      setSelectedSnapshot((item) => item?.id === activeRow.id ? { ...item, channel } : item);
+      setChosenConnection(connectionId);
+      setSendOptions(await fetchConversationSendOptions(activeRow.id));
+      router.refresh();
+    } finally {
+      setLinkingChannel(false);
+    }
   }
 
   // ── Lista: busca (no servidor) e "carregar mais" ──────────────────────────
@@ -557,7 +581,19 @@ export function ConversationsView({
                     <div className="conversation-channel-summary">
                       <span>CANAL DA CONVERSA</span>
                       <ChannelBadge channel={activeChannel} />
-                      <small>{activeChannel ? `Instância/conexão: ${activeChannel.label}` : "Sem vínculo: não é possível identificar a instância."}</small>
+                      {activeChannel ? (
+                        <small>{`Instância/conexão: ${activeChannel.label}`}</small>
+                      ) : usableChannels.length > 0 ? (
+                        <label className="conversation-channel-picker">
+                          <small>Selecione a instância que deve atender este histórico:</small>
+                          <select value="" disabled={linkingChannel} onChange={(event) => chooseConversationChannel(event.target.value)} aria-label="Vincular canal ao atendimento">
+                            <option value="">{linkingChannel ? "Vinculando canal..." : "Selecionar canal/instância"}</option>
+                            {usableChannels.map((option) => <option key={option.connectionId} value={option.connectionId}>{PROVIDER_LABEL[option.provider]} · {option.label}{option.existing ? "" : " (iniciar conversa)"}</option>)}
+                          </select>
+                        </label>
+                      ) : (
+                        <small>Sem instância elegível. Conecte um canal ou cadastre telefone/e-mail no contato.</small>
+                      )}
                       {activeChannel?.provider === "WHATSAPP_CLOUD" && <small className={cloudWindowOpen ? "conversation-window-open" : "conversation-window-closed"}>{cloudWindowOpen ? `Janela 24h aberta até ${new Date(cloudWindowEnds!).toLocaleString("pt-BR")}` : "Janela 24h encerrada · somente template aprovado"}</small>}
                     </div>
                     {currentUserRole === "ADMIN" ? (

@@ -4,8 +4,9 @@ import { requireOrgUser } from "@/lib/auth";
 import { ActivitiesView } from "@/components/activities/ActivitiesView";
 
 export default async function ActivitiesPage() {
-  const { organizationId } = await requireOrgUser();
-  const [lists, team] = await Promise.all([getTaskBoard(organizationId), getTeamMembers(organizationId)]);
+  const user = await requireOrgUser();
+  const { organizationId } = user;
+  const [lists, team] = await Promise.all([getTaskBoard(organizationId, { participantId: user.id }), getTeamMembers(organizationId)]);
 
-  return <ActivitiesView initialLists={lists} team={team} />;
+  return <ActivitiesView initialLists={lists} team={team} currentUserId={user.id} />;
 }

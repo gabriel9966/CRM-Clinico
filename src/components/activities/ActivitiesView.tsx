@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Icon } from "@/components/icons";
 import { initials } from "@/lib/format";
 import type { TeamMemberDTO } from "@/lib/types";
@@ -53,11 +53,48 @@ function moveLocal(lists: TaskListDTO[], cardId: string, toListId: string, befor
   });
 }
 
-export function ActivitiesView({ initialLists, team }: { initialLists: TaskListDTO[]; team: TeamMemberDTO[] }) {
+type CalendarCard = TaskCardDTO & { listName: string };
+
+function TaskCalendar({ cards, month, onMonthChange, onOpen }: { cards: CalendarCard[]; month: Date; onMonthChange: (month: Date) => void; onOpen: (card: TaskCardDTO) => void }) {
+  const start = new Date(month.getFullYear(), month.getMonth(), 1);
+  const gridStart = new Date(start);
+  gridStart.setDate(start.getDate() - start.getDay());
+  const days = Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(gridStart);
+    date.setDate(gridStart.getDate() + index);
+    return date;
+  });
+  const title = month.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+  const today = new Date();
+  return (
+    <section className="task-calendar" aria-label="Calendário de tarefas">
+      <div className="task-calendar-head">
+        <div><strong>{title}</strong><span>{cards.filter((card) => card.dueAt && new Date(card.dueAt).getMonth() === month.getMonth() && new Date(card.dueAt).getFullYear() === month.getFullYear()).length} tarefa(s) no mês</span></div>
+        <div><button className="btn small" onClick={() => onMonthChange(new Date(month.getFullYear(), month.getMonth() - 1, 1))} aria-label="Mês anterior">&#8249;</button><button className="btn small" onClick={() => onMonthChange(new Date())}>Hoje</button><button className="btn small" onClick={() => onMonthChange(new Date(month.getFullYear(), month.getMonth() + 1, 1))} aria-label="Próximo mês">&#8250;</button></div>
+      </div>
+      <div className="task-calendar-grid">
+        {["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"].map((day) => <div className="task-calendar-weekday" key={day}>{day}</div>)}
+        {days.map((day) => {
+          const sameMonth = day.getMonth() === month.getMonth();
+          const dayCards = cards.filter((card) => { const due = new Date(card.dueAt); return due.toDateString() === day.toDateString(); });
+          return <div className={`task-calendar-day ${sameMonth ? "" : "outside"} ${day.toDateString() === today.toDateString() ? "today" : ""}`} key={day.toISOString()}><span>{day.getDate()}</span>{dayCards.slice(0, 3).map((card) => <button type="button" key={card.id} className={`task-calendar-item ${card.overdue ? "late" : ""}`} onClick={() => onOpen(card)}>{card.contactName ? `${card.contactName} — ` : ""}{card.title}</button>)}{dayCards.length > 3 && <small>+{dayCards.length - 3} mais</small>}</div>;
+        })}
+      </div>
+    </section>
+  );
+}
+
+export function ActivitiesView({ initialLists, team, currentUserId }: { initialLists: TaskListDTO[]; team: TeamMemberDTO[]; currentUserId: string }) {
   const router = useRouter();
   const [lists, setLists] = useState(initialLists);
   const [search, setSearch] = useState("");
   const [assignee, setAssignee] = useState("");
+  const [scope, setScope] = useState<"mine" | "team">("mine");
+  const [view, setView] = useState<"board" | "calendar">("board");
+  const [onlyOverdue, setOnlyOverdue] = useState(false);
+  const [onlyUnassigned, setOnlyUnassigned] = useState(false);
+  const [tag, setTag] = useState("");
+  const [calendarMonth, setCalendarMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modal, setModal] = useState<CardModal | null>(null);
@@ -71,7 +108,16 @@ export function ActivitiesView({ initialLists, team }: { initialLists: TaskListD
   const [renaming, setRenaming] = useState<string | null>(null);
   const requestId = useRef(0);
   const firstRun = useRef(true);
-  const filter = { assigneeId: assignee || undefined, search: search.trim() || undefined };
+  const filter = {
+    assigneeId: scope === "team" ? assignee || undefined : undefined,
+    participantId: scope === "mine" ? currentUserId : undefined,
+    search: search.trim() || undefined,
+    overdue: onlyOverdue || undefined,
+    unassigned: onlyUnassigned || undefined,
+    tag: tag || undefined,
+  };
+  const availableTags = useMemo(() => [...new Set(lists.flatMap((list) => list.cards.flatMap((card) => card.tags)))].sort(), [lists]);
+  const visibleCards = useMemo(() => lists.flatMap((list) => list.cards.map((card) => ({ ...card, listName: list.name }))), [lists]);
 
   async function reload() {
     const mine = ++requestId.current;
@@ -98,7 +144,7 @@ export function ActivitiesView({ initialLists, team }: { initialLists: TaskListD
     const timer = setTimeout(() => void reload(), 250);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, assignee]);
+  }, [search, assignee, scope, onlyOverdue, onlyUnassigned, tag]);
 
   async function run(fn: () => Promise<unknown>, opts: { refresh?: boolean } = {}) {
     setBusy(true);
@@ -139,7 +185,7 @@ export function ActivitiesView({ initialLists, team }: { initialLists: TaskListD
     const title = draft.trim();
     if (!title) return;
     setDraft("");
-    await run(() => createTaskCard(listId, title, assignee || null));
+    await run(() => createTaskCard(listId, title, assignee || (scope === "mine" ? currentUserId : null)));
   }
 
   async function submit(e: FormEvent<HTMLFormElement>) {
@@ -154,6 +200,8 @@ export function ActivitiesView({ initialLists, team }: { initialLists: TaskListD
       contactId: String(fd.get("contactId") || "") || null,
       opportunityId: String(fd.get("opportunityId") || "") || null,
       assigneeId: String(fd.get("assigneeId") || "") || null,
+      tags: String(fd.get("tags") || "").split(",").map((item) => item.trim()).filter(Boolean),
+      collaboratorIds: fd.getAll("collaboratorIds").map(String),
       listId: String(fd.get("listId") || "") || null,
     };
     const existing = modal.data;
@@ -177,7 +225,7 @@ export function ActivitiesView({ initialLists, team }: { initialLists: TaskListD
       <div className="topbar">
         <div>
           <h1>Tarefas</h1>
-          <div className="sub">Quadro de tarefas: arraste os cartões entre as colunas — inclusive os criados por automações</div>
+          <div className="sub">Organize próximos passos de clientes, negócios e equipe em um só lugar</div>
         </div>
         <button className="btn primary" onClick={() => setModal({ data: null, listId: lists.find((l) => !l.isDone)?.id ?? lists[0]?.id ?? "" })}>
           <Icon.plus /> Nova tarefa
@@ -185,20 +233,27 @@ export function ActivitiesView({ initialLists, team }: { initialLists: TaskListD
       </div>
 
       <div className="content">
-        <div className="pipeline-bar" style={{ gap: 8 }}>
-          <div className="search-bar" style={{ margin: 0, flex: 1, maxWidth: 320 }}>
+        <div className="task-toolbar">
+          <div className="task-view-switch" role="tablist" aria-label="Visualização de tarefas"><button type="button" className={view === "board" ? "active" : ""} onClick={() => setView("board")}>Quadro</button><button type="button" className={view === "calendar" ? "active" : ""} onClick={() => setView("calendar")}>Calendário</button></div>
+          <div className="task-scope-switch" role="tablist" aria-label="Escopo de tarefas"><button type="button" className={scope === "mine" ? "active" : ""} onClick={() => setScope("mine")}>Minhas tarefas</button><button type="button" className={scope === "team" ? "active" : ""} onClick={() => setScope("team")}>Toda a equipe</button></div>
+          <div className="search-bar task-search">
             <Icon.search />
-            <input placeholder="Buscar tarefa..." value={search} onChange={(e) => setSearch(e.target.value)} />
+            <input placeholder="Buscar cliente ou tarefa..." value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
-          <select value={assignee} onChange={(e) => setAssignee(e.target.value)} style={{ maxWidth: 220 }}>
-            <option value="">Todos os responsáveis</option>
-            {team.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-          </select>
+          <button className={`btn small ${onlyOverdue ? "primary" : ""}`} onClick={() => setOnlyOverdue((value) => !value)}>Só vencidas</button>
+          <button className={`btn small ${onlyUnassigned ? "primary" : ""}`} onClick={() => setOnlyUnassigned((value) => !value)}>Sem responsável</button>
           {loading && <span className="muted" style={{ fontSize: 12 }}>Atualizando…</span>}
+        </div>
+        <div className="task-filters">
+          {scope === "team" && <select value={assignee} onChange={(e) => setAssignee(e.target.value)}><option value="">Todas as pessoas</option>{team.filter((member) => member.isActive).map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}</select>}
+          <select value={tag} onChange={(e) => setTag(e.target.value)}><option value="">Todas as etiquetas</option>{availableTags.map((item) => <option key={item} value={item}>{item}</option>)}</select>
+          {(onlyOverdue || onlyUnassigned || tag || assignee) && <button className="btn small ghost" onClick={() => { setOnlyOverdue(false); setOnlyUnassigned(false); setTag(""); setAssignee(""); }}>Limpar filtros</button>}
         </div>
         {error && <p style={{ color: "var(--red)", fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{error}</p>}
 
-        <div className="kanban task-board" onClick={() => setMenu(null)}>
+        {view === "calendar" && <TaskCalendar cards={visibleCards} month={calendarMonth} onMonthChange={setCalendarMonth} onOpen={(card) => setModal({ data: card, listId: card.listId ?? lists[0]?.id ?? "" })} />}
+
+        <div className="kanban task-board" style={{ display: view === "board" ? undefined : "none" }} onClick={() => setMenu(null)}>
           {lists.map((list, index) => (
             <div key={list.id} className="kanban-col task-col">
               <div className="kanban-col-head">
@@ -263,6 +318,7 @@ export function ActivitiesView({ initialLists, team }: { initialLists: TaskListD
               >
                 {list.cards.map((card) => {
                   const who = assigneeOf(card.assigneeId);
+                  const collaborators = card.collaboratorIds.map(assigneeOf).filter((member): member is TeamMemberDTO => Boolean(member));
                   return (
                     <div
                       key={card.id}
@@ -286,11 +342,13 @@ export function ActivitiesView({ initialLists, team }: { initialLists: TaskListD
                         <div className={`title ${card.done ? "strike" : ""}`} style={{ marginBottom: 0, flex: 1 }}>{card.title}</div>
                       </div>
                       {(card.contactName || card.opportunityTitle) && (
-                        <div className="contact-row" style={{ marginTop: 6 }}>
+                        <div className="task-card-link" style={{ marginTop: 6 }}>
                           {card.contactName && <span>{card.contactName}</span>}
-                          {card.opportunityTitle && <span>· {card.opportunityTitle}</span>}
+                          {card.opportunityTitle && <span>{card.opportunityTitle}</span>}
                         </div>
                       )}
+                      {card.notes && <p className="task-card-notes">{card.notes}</p>}
+                      {card.tags.length > 0 && <div className="task-card-tags">{card.tags.map((item) => <span key={item}>{item}</span>)}</div>}
                       <div className="deal-card-footer">
                         <span className={`task-due ${card.overdue ? "overdue" : ""}`}>
                           {TYPE_LABEL[card.type]} · {fmtDue(card.dueAt)}{card.overdue ? " · atrasada" : ""}
@@ -300,6 +358,8 @@ export function ActivitiesView({ initialLists, team }: { initialLists: TaskListD
                             {initials(who.name)}
                           </span>
                         )}
+                        {collaborators.slice(0, 3).map((member) => <span className="avatar task-collaborator" title={`Participante: ${member.name}`} key={member.id} style={{ width: 20, height: 20, fontSize: 9, background: member.color }}>{initials(member.name)}</span>)}
+                        {collaborators.length > 3 && <span className="task-more-members">+{collaborators.length - 3}</span>}
                       </div>
                     </div>
                   );
@@ -415,7 +475,7 @@ export function ActivitiesView({ initialLists, team }: { initialLists: TaskListD
                   </div>
                   <div className="field">
                     <label>Responsável</label>
-                    <select name="assigneeId" defaultValue={modal.data?.assigneeId ?? ""}>
+                    <select name="assigneeId" defaultValue={modal.data?.assigneeId ?? currentUserId}>
                       <option value="">Sem responsável</option>
                       {team.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
                     </select>
@@ -448,6 +508,18 @@ export function ActivitiesView({ initialLists, team }: { initialLists: TaskListD
                 <div className="field">
                   <label>Notas</label>
                   <textarea name="notes" defaultValue={modal.data?.notes ?? ""} />
+                </div>
+                <div className="field">
+                  <label>Etiquetas</label>
+                  <input name="tags" defaultValue={modal.data?.tags.join(", ") ?? ""} placeholder="Ex: Urgente, aguardando cliente, documentos" />
+                  <small className="muted">Separe as etiquetas por vírgula.</small>
+                </div>
+                <div className="field">
+                  <label>Outros participantes</label>
+                  <div className="task-member-picker">
+                    {team.filter((member) => member.isActive && member.id !== modal.data?.assigneeId).map((member) => <label key={member.id}><input type="checkbox" name="collaboratorIds" value={member.id} defaultChecked={modal.data?.collaboratorIds.includes(member.id)} /><span className="avatar" style={{ background: member.color }}>{initials(member.name)}</span>{member.name}</label>)}
+                  </div>
+                  <small className="muted">Participantes também veem a tarefa em “Minhas tarefas”.</small>
                 </div>
               </div>
               <div className="modal-foot">

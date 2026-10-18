@@ -17,12 +17,12 @@ function slugify(name: string) {
 }
 
 const DEFAULT_STAGES = [
-  { label: "Novo Lead", color: "#64748b" },
-  { label: "Contato Feito", color: "#2563eb" },
-  { label: "Proposta Enviada", color: "#7c3aed" },
-  { label: "Negociação", color: "#ea580c" },
-  { label: "Ganho", color: "#16a34a" },
-  { label: "Perdido", color: "#dc2626" },
+  { label: "Novo Lead", color: "#64748b", status: "OPEN" as const },
+  { label: "Contato Feito", color: "#2563eb", status: "OPEN" as const },
+  { label: "Proposta Enviada", color: "#7c3aed", status: "OPEN" as const },
+  { label: "Negociação", color: "#ea580c", status: "OPEN" as const },
+  { label: "Ganho", color: "#16a34a", status: "WON" as const },
+  { label: "Perdido", color: "#dc2626", status: "LOST" as const },
 ];
 
 export async function createOrganization(

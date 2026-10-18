@@ -42,8 +42,68 @@ async function getConversationForUser(user: { id: string; role: string; organiza
 export async function fetchConversationSendOptions(conversationId: string): Promise<SendOptionDTO[]> {
   const user = await requireOrgUser();
   const conversation = await getConversationForUser(user, conversationId);
-  if (!conversation?.connectionId) return [];
-  return (await getSendOptions(user.organizationId, conversation.contactId)).filter((option) => option.connectionId === conversation.connectionId);
+  if (!conversation) return [];
+  const options = await getSendOptions(user.organizationId, conversation.contactId);
+  const permitted = await Promise.all(options.map(async (option) => ({
+    option,
+    allowed: await canAccessConnection(user, option.connectionId, "send"),
+  })));
+  // Uma conversa que já tem instância não pode trocar de rota acidentalmente.
+  // Em históricos legados sem instância, devolvemos as opções elegíveis para que
+  // o atendente possa fazer o vínculo explicitamente na tela.
+  return permitted
+    .filter(({ option, allowed }) => allowed && (!conversation.connectionId || option.connectionId === conversation.connectionId))
+    .map(({ option }) => option);
+}
+
+/** Vincula um histórico legado a uma instância real antes do primeiro envio.
+ * Não troca o canal de uma conversa que já foi roteada pelo webhook. */
+export async function linkConversationChannel(conversationId: string, connectionId: string) {
+  const user = await requireOrgUser();
+  if (!hasModulePermission(user, "conversations.reply")) {
+    return { ok: false as const, error: "Você não tem permissão para responder atendimentos." };
+  }
+  const conversation = await getConversationForUser(user, conversationId);
+  if (!conversation || !(await canTalkTo(user, conversation.contactId))) {
+    return { ok: false as const, error: "Você não pode vincular um canal neste atendimento." };
+  }
+  if (conversation.connectionId) {
+    return { ok: false as const, error: "Esta conversa já possui uma instância vinculada e não pode ser trocada por aqui." };
+  }
+  if (!(await canAccessConnection(user, connectionId, "send"))) {
+    return { ok: false as const, error: "Você não tem permissão para usar esta instância." };
+  }
+  const option = (await getSendOptions(user.organizationId, conversation.contactId)).find((item) => item.connectionId === connectionId);
+  if (!option) {
+    return { ok: false as const, error: "Esta instância não pode iniciar conversa com este contato. Cadastre telefone/e-mail ou aguarde o primeiro contato no Instagram." };
+  }
+  if (!option.connected) {
+    return { ok: false as const, error: "Esta instância está desconectada. Reconecte-a antes de vincular." };
+  }
+  const duplicate = await prisma.conversation.findFirst({
+    where: { organizationId: user.organizationId, contactId: conversation.contactId, connectionId, id: { not: conversationId } },
+    select: { id: true },
+  });
+  if (duplicate) {
+    return { ok: false as const, error: "Este contato já possui outro atendimento nesta instância. Abra a conversa existente para evitar misturar os históricos." };
+  }
+  try {
+    await prisma.conversation.update({ where: { id: conversationId }, data: { connectionId } });
+  } catch (error) {
+    if (typeof error === "object" && error && (error as { code?: string }).code === "P2002") {
+      return { ok: false as const, error: "Este contato já possui outro atendimento nesta instância." };
+    }
+    throw error;
+  }
+  await audit(user.organizationId, {
+    action: "conversation.channel_linked",
+    entity: "Conversation",
+    entityId: conversationId,
+    ...actorOf(user),
+    meta: { connectionId, provider: option.provider, label: option.label },
+  });
+  revalidatePath("/conversations");
+  return { ok: true as const, channel: { connectionId: option.connectionId, provider: option.provider, label: option.label } };
 }
 
 export type PrivateNoteDTO = { id: string; text: string; createdAt: string };
@@ -151,6 +211,7 @@ export async function fetchConversationEvents(conversationId: string): Promise<C
     "conversation.claimed": "Atendimento assumido",
     "conversation.closed": "Atendimento finalizado",
     "conversation.reopened": "Atendimento reaberto",
+    "conversation.channel_linked": "Canal/instância vinculada ao atendimento",
     "conversation.tag_added": "Tag adicionada",
     "conversation.tag_removed": "Tag removida",
   };

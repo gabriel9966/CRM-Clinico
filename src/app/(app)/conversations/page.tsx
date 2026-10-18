@@ -9,6 +9,7 @@ import { ConversationsView } from "@/components/conversations/ConversationsView"
 export default async function ConversationsPage() {
   const user = await requireOrgUser();
   const connectionAccessIds = await allowedConnectionIds(user);
+  const sendConnectionAccessIds = await allowedConnectionIds(user, "send");
   const canReadConversations = hasModulePermission(user, "conversations.read");
 
   // Permissão: ADMIN vê todas as conversas da empresa; MEMBER só vê as dos
@@ -28,8 +29,11 @@ export default async function ConversationsPage() {
   const firstId = page.items[0]?.id;
   const [firstThread, firstSendOptions] = await Promise.all([
     firstId ? getConversationMessagesPage(user.organizationId, { id: user.id, role: user.role }, firstId) : Promise.resolve(null),
-    firstId && page.items[0]!.channel?.connectionId
-      ? getSendOptions(user.organizationId, page.items[0]!.contact.id).then((options) => options.filter((option) => option.connectionId === page.items[0]!.channel!.connectionId))
+    firstId
+      ? getSendOptions(user.organizationId, page.items[0]!.contact.id).then((options) => options.filter((option) =>
+        (sendConnectionAccessIds === null || sendConnectionAccessIds.includes(option.connectionId)) &&
+        (!page.items[0]!.channel?.connectionId || option.connectionId === page.items[0]!.channel!.connectionId)
+      ))
       : Promise.resolve([]),
   ]);
 

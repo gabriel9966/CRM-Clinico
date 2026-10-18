@@ -20,6 +20,8 @@ export type ActivityInput = {
   contactId: string | null;
   opportunityId: string | null;
   assigneeId: string | null;
+  tags?: string[];
+  collaboratorIds?: string[];
   /** Coluna do quadro; omitido = não mexe (na edição) ou primeira coluna "a fazer" (na criação). */
   listId?: string | null;
 };
@@ -39,16 +41,27 @@ function revalidateAll() {
 // Os ids vêm do navegador: confere que contato, negócio e responsável são desta
 // organização (senão dava para vincular tarefas a dados de outra empresa).
 async function assertActivityRefs(organizationId: string, data: ActivityInput) {
-  const [contact, opportunity, assignee] = await Promise.all([
+  const collaborators = [...new Set((data.collaboratorIds ?? []).filter(Boolean))];
+  const [contact, opportunity, assignee, collaboratorCount] = await Promise.all([
     data.contactId ? prisma.contact.findFirst({ where: { id: data.contactId, organizationId }, select: { id: true } }) : true,
     data.opportunityId
       ? prisma.opportunity.findFirst({ where: { id: data.opportunityId, organizationId }, select: { id: true } })
       : true,
     data.assigneeId ? prisma.user.findFirst({ where: { id: data.assigneeId, organizationId }, select: { id: true } }) : true,
+    collaborators.length ? prisma.user.count({ where: { id: { in: collaborators }, organizationId, isActive: true } }) : Promise.resolve(0),
   ]);
   if (!contact) throw new Error("Contato inválido.");
   if (!opportunity) throw new Error("Oportunidade inválida.");
   if (!assignee) throw new Error("Responsável inválido.");
+  if (collaboratorCount !== collaborators.length) throw new Error("Um ou mais participantes são inválidos.");
+}
+
+function cleanTags(tags: string[] | undefined) {
+  return [...new Set((tags ?? []).map((tag) => tag.trim().slice(0, 50)).filter(Boolean))].slice(0, 20);
+}
+
+function cleanCollaborators(ids: string[] | undefined, assigneeId: string | null) {
+  return [...new Set((ids ?? []).filter(Boolean).filter((id) => id !== assigneeId))].slice(0, 50);
 }
 
 async function nextPosition(listId: string) {
@@ -76,6 +89,8 @@ export async function createActivity(data: ActivityInput) {
       title: data.title,
       type: data.type,
       notes: data.notes || null,
+      tags: JSON.stringify(cleanTags(data.tags)),
+      collaboratorIds: JSON.stringify(cleanCollaborators(data.collaboratorIds, data.assigneeId)),
       dueAt: new Date(data.dueAt),
       contactId: data.contactId,
       opportunityId: data.opportunityId,
@@ -104,6 +119,8 @@ export async function updateActivity(id: string, data: ActivityInput) {
       title: data.title,
       type: data.type,
       notes: data.notes || null,
+      ...(data.tags !== undefined ? { tags: JSON.stringify(cleanTags(data.tags)) } : {}),
+      ...(data.collaboratorIds !== undefined ? { collaboratorIds: JSON.stringify(cleanCollaborators(data.collaboratorIds, data.assigneeId)) } : {}),
       dueAt: new Date(data.dueAt),
       contactId: data.contactId,
       opportunityId: data.opportunityId,

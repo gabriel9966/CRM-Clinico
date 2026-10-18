@@ -346,11 +346,18 @@ model UserPipelineAccess {
   @@index([pipelineId])
 }
 
+enum StageStatus {
+  OPEN
+  WON
+  LOST
+}
+
 model Stage {
   id         String   @id @default(cuid())
   label      String
   color      String
   order      Int
+  status     StageStatus @default(OPEN)
   requiredFields String @default("[]")
   allowedTeams String @default("[]")
   requireLossReason Boolean @default(false)
@@ -756,6 +763,10 @@ model Activity {
   type      ActivityType @default(TASK)
   title     String
   notes     String?
+  // Etiquetas e participantes adicionais do quadro. Mantidos em JSON para
+  // preservar compatibilidade com tarefas criadas por automações/API.
+  tags            String   @default("[]")
+  collaboratorIds String   @default("[]")
   dueAt     DateTime
   done      Boolean      @default(false)
   createdAt DateTime     @default(now())

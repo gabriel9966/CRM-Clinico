@@ -32,7 +32,7 @@ export function TeamView({
   // "Em aberto" = negócios fora das etapas Ganho/Perdido (mesma convenção do dashboard).
   const closedStageIds = new Set(
     pipelines.flatMap((p) =>
-      p.stages.filter((s) => ["ganho", "perdido"].includes(s.label.trim().toLowerCase())).map((s) => s.id)
+      p.stages.filter((s) => s.status !== "OPEN").map((s) => s.id)
     )
   );
   const openByOwner = new Map<string, { count: number; sum: number }>();

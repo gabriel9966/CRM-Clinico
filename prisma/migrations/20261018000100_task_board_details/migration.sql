@@ -1,0 +1,3 @@
+ALTER TABLE "Activity"
+  ADD COLUMN "tags" TEXT NOT NULL DEFAULT '[]',
+  ADD COLUMN "collaboratorIds" TEXT NOT NULL DEFAULT '[]';
