@@ -166,6 +166,15 @@ export function ConversationsView({
   const activeOwner = ownerOf(activeRow?.ownerId ?? null);
   const defaultPipeline = pipelines[0];
   const linkedChannels = sendOptions.filter((option) => option.existing);
+  const connectedConnections = connections.filter((connection) => connection.status === "CONNECTED");
+  const hasEligibleInstance = sendOptions.some((option) => option.connected);
+  const instanceSetupMessage = connections.length === 0
+    ? "Nenhuma instancia foi cadastrada para a empresa."
+    : connectedConnections.length === 0
+      ? "Todas as instancias cadastradas estao desconectadas."
+      : !hasEligibleInstance
+        ? "Ha instancias conectadas, mas nenhuma pode iniciar conversa com este contato."
+        : "Selecione uma instancia para iniciar este atendimento.";
   const filtersApplied = Object.entries(filters).filter(([key, value]) => value && !(key === "status" && value === "OPEN")).length;
 
   async function changeAssignee(ownerId: string | null, mode: "assign" | "transfer" | "claim" = "assign") {
@@ -583,16 +592,25 @@ export function ConversationsView({
                       <ChannelBadge channel={activeChannel} />
                       {activeChannel ? (
                         <small>{`Instância/conexão: ${activeChannel.label}`}</small>
-                      ) : usableChannels.length > 0 ? (
-                        <label className="conversation-channel-picker">
+                      ) : (
+                        <>
+                        <div className="conversation-channel-picker">
+                        <label>
                           <small>Selecione a instância que deve atender este histórico:</small>
-                          <select value="" disabled={linkingChannel} onChange={(event) => chooseConversationChannel(event.target.value)} aria-label="Vincular canal ao atendimento">
+                          <select value="" disabled={linkingChannel || usableChannels.length === 0} onChange={(event) => chooseConversationChannel(event.target.value)} aria-label="Selecionar instancia para o atendimento">
                             <option value="">{linkingChannel ? "Vinculando canal..." : "Selecionar canal/instância"}</option>
                             {usableChannels.map((option) => <option key={option.connectionId} value={option.connectionId}>{PROVIDER_LABEL[option.provider]} · {option.label}{option.existing ? "" : " (iniciar conversa)"}</option>)}
                           </select>
                         </label>
-                      ) : (
+                        {usableChannels.length === 0 && (
+                          <div className="conversation-instance-empty">
+                            <small>{instanceSetupMessage}</small>
+                            {currentUserRole === "ADMIN" ? <button type="button" className="btn small ghost" onClick={() => router.push("/connections")}>Conectar instancia</button> : <small>Peca acesso a uma instancia conectada a um administrador.</small>}
+                          </div>
+                        )}
+                        </div>
                         <small>Sem instância elegível. Conecte um canal ou cadastre telefone/e-mail no contato.</small>
+                        </>
                       )}
                       {activeChannel?.provider === "WHATSAPP_CLOUD" && <small className={cloudWindowOpen ? "conversation-window-open" : "conversation-window-closed"}>{cloudWindowOpen ? `Janela 24h aberta até ${new Date(cloudWindowEnds!).toLocaleString("pt-BR")}` : "Janela 24h encerrada · somente template aprovado"}</small>}
                     </div>
