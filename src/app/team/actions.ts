@@ -33,7 +33,9 @@ export async function createTeamMember(
   }
 
   const passwordHash = await bcrypt.hash(password, 10);
-  await prisma.user.create({ data: { name, email, passwordHash, color, team, organizationId } });
+  // Contas novas nunca herdam o acesso amplo do comportamento legado. O
+  // administrador precisa liberar módulos, pipelines e instâncias na matriz.
+  await prisma.user.create({ data: { name, email, passwordHash, color, team, organizationId, accessConfigured: true, permissions: "[]" } });
   revalidatePath("/team");
   return {};
 }

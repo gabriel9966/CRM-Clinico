@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
-import { requireOrgUser } from "@/lib/auth";
+import { requireAdminUser } from "@/lib/auth";
 
 export type CustomFieldInput = {
   entity: "CONTACT" | "OPPORTUNITY";
@@ -24,7 +24,7 @@ function slugifyKey(label: string) {
 }
 
 export async function createCustomField(data: CustomFieldInput) {
-  const { organizationId } = await requireOrgUser();
+  const { organizationId } = await requireAdminUser();
   const label = data.label.trim();
   if (!label) return { error: "Nome do campo é obrigatório." };
   const key = slugifyKey(label);
@@ -59,7 +59,7 @@ export async function createCustomField(data: CustomFieldInput) {
 }
 
 export async function deleteCustomField(id: string) {
-  const { organizationId } = await requireOrgUser();
+  const { organizationId } = await requireAdminUser();
   await prisma.customFieldDefinition.deleteMany({ where: { id, organizationId } });
   revalidatePath("/custom-fields");
   revalidatePath("/contacts");

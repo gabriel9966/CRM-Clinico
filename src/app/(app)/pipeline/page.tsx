@@ -1,4 +1,4 @@
-import { getPipelines, getTeamMembers, getCustomFieldDefinitions } from "@/lib/data";
+import { getPipelines, getTeamMembers, getCustomFieldDefinitions, getAutomations } from "@/lib/data";
 import { listLossReasons, listTags } from "@/lib/crm-catalog";
 import { getPipelineBoard } from "@/lib/queries";
 import { requireOrgUser } from "@/lib/auth";
@@ -9,12 +9,13 @@ export default async function PipelinePage() {
   const user = await requireOrgUser();
   const { organizationId } = user;
   const accessIds = await allowedPipelineIds(user);
-  const [allPipelines, team, customFieldDefs, lossReasons, tags] = await Promise.all([
+  const [allPipelines, team, customFieldDefs, lossReasons, tags, automations] = await Promise.all([
     getPipelines(organizationId),
     getTeamMembers(organizationId),
     getCustomFieldDefinitions(organizationId),
     listLossReasons(organizationId),
     listTags(organizationId, "opportunity"),
+    getAutomations(organizationId),
   ]);
   const pipelines = !hasModulePermission(user, "pipeline.read") ? [] : accessIds === null ? allPipelines : allPipelines.filter((pipeline) => accessIds.includes(pipeline.id));
 
@@ -32,6 +33,7 @@ export default async function PipelinePage() {
       customFieldDefs={customFieldDefs}
       lossReasons={lossReasons.map((reason) => ({ id: reason.id, name: reason.name }))}
       tags={tags.map((tag) => tag.name)}
+      automations={automations.map((automation) => ({ id: automation.id, name: automation.name, enabled: automation.enabled }))}
     />
   );
 }

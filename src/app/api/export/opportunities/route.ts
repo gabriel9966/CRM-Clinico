@@ -3,6 +3,7 @@ import { getTeamMembers, getPipelines } from "@/lib/data";
 import { prisma } from "@/lib/prisma";
 import { csvDownload } from "@/lib/export";
 import { audit, actorOf } from "@/lib/audit";
+import { allowedPipelineIds, hasModulePermission } from "@/lib/access";
 
 const BATCH = 1000;
 
@@ -17,8 +18,13 @@ function parseTags(raw: string): string[] {
 
 export async function GET() {
   const user = await requireOrgUser();
+  if (!hasModulePermission(user, "pipeline.read") || !hasModulePermission(user, "data.import_export")) {
+    return new Response("Sem permissão para exportar oportunidades.", { status: 403 });
+  }
   const { organizationId } = user;
-  const [team, pipelines] = await Promise.all([getTeamMembers(organizationId), getPipelines(organizationId)]);
+  const permittedPipelineIds = await allowedPipelineIds(user);
+  const [team, allPipelines] = await Promise.all([getTeamMembers(organizationId), getPipelines(organizationId)]);
+  const pipelines = permittedPipelineIds === null ? allPipelines : allPipelines.filter((pipeline) => permittedPipelineIds.includes(pipeline.id));
 
   const ownerName = (id: string | null) => (id ? team.find((m) => m.id === id)?.name ?? "" : "");
   const pipelineName = (id: string) => pipelines.find((p) => p.id === id)?.name ?? "";
@@ -31,7 +37,7 @@ export async function GET() {
   return csvDownload("oportunidades.csv", columns, async (cursor) => {
     // O contato vem junto na mesma consulta (JOIN), sem carregar a base de contatos.
     const rows = await prisma.opportunity.findMany({
-      where: { organizationId },
+      where: { organizationId, ...(permittedPipelineIds === null ? {} : { pipelineId: { in: permittedPipelineIds } }) },
       include: { contact: { select: { name: true, email: true, phone: true } } },
       orderBy: { id: "asc" },
       take: BATCH + 1,

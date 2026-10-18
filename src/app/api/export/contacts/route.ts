@@ -3,6 +3,7 @@ import { getTeamMembers } from "@/lib/data";
 import { prisma } from "@/lib/prisma";
 import { csvDownload } from "@/lib/export";
 import { audit, actorOf } from "@/lib/audit";
+import { hasModulePermission } from "@/lib/access";
 
 const BATCH = 1000;
 
@@ -17,6 +18,9 @@ function parseTags(raw: string): string[] {
 
 export async function GET() {
   const user = await requireOrgUser();
+  if (!hasModulePermission(user, "contacts.read") || !hasModulePermission(user, "data.import_export")) {
+    return new Response("Sem permissão para exportar contatos.", { status: 403 });
+  }
   const { organizationId } = user;
   const team = await getTeamMembers(organizationId);
   const ownerName = (id: string | null) => (id ? team.find((m) => m.id === id)?.name ?? "" : "");

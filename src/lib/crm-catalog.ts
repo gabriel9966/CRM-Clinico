@@ -32,11 +32,28 @@ export type TagDTO = { id: string; name: string; color: string; description: str
  * ao salvar contatos, importar CSV e por automações — o catálogo se mantém
  * completo sem o usuário cadastrar tudo à mão.
  */
-export async function syncTags(organizationId: string, names: string[]) {
+export type TagTarget = "contact" | "opportunity";
+
+/** Mantém o catálogo e, quando há alvo, impede associar uma tag fora do
+ * escopo definido pelo administrador. Esta é a única porta de entrada para
+ * tags criadas por telas, importações, webhooks e automações. */
+export async function syncTags(organizationId: string, names: string[], target?: TagTarget) {
   const clean = [...new Set(names.map(normalize).filter((n) => n && n.length <= 50))];
   if (clean.length === 0) return;
+  const existing = await prismaRaw.tag.findMany({ where: { organizationId, name: { in: clean } } });
+  const byName = new Map(existing.map((tag) => [tag.name, tag]));
+  const invalid = clean.find((name) => {
+    const tag = byName.get(name);
+    return tag && target === "contact" ? !tag.appliesToContacts : tag && target === "opportunity" ? !tag.appliesToOpportunities : false;
+  });
+  if (invalid) throw new AppError("escopo_tag_invalido", `a tag "${invalid}" não pode ser usada neste tipo de registro`, 400);
   await prismaRaw.tag.createMany({
-    data: clean.map((name) => ({ organizationId, name })),
+    data: clean.filter((name) => !byName.has(name)).map((name) => ({
+      organizationId,
+      name,
+      appliesToContacts: target !== "opportunity",
+      appliesToOpportunities: target !== "contact",
+    })),
     skipDuplicates: true,
   });
 }
@@ -143,6 +160,13 @@ export async function updateTag(
   const appliesToContacts = input.appliesToContacts ?? tag.appliesToContacts;
   const appliesToOpportunities = input.appliesToOpportunities ?? tag.appliesToOpportunities;
   if (!appliesToContacts && !appliesToOpportunities) throw new AppError("escopo_invalido", "escolha ao menos onde esta tag pode ser usada", 400);
+  if ((tag.appliesToContacts && !appliesToContacts) || (tag.appliesToOpportunities && !appliesToOpportunities)) {
+    const [contacts, opportunities] = await Promise.all([
+      tag.appliesToContacts && !appliesToContacts ? prismaRaw.contact.count({ where: { organizationId, tags: { contains: tag.name } } }) : 0,
+      tag.appliesToOpportunities && !appliesToOpportunities ? prismaRaw.opportunity.count({ where: { organizationId, tags: { contains: tag.name } } }) : 0,
+    ]);
+    if (contacts || opportunities) throw new AppError("escopo_em_uso", "remova esta tag dos registros existentes antes de restringir seu escopo", 409);
+  }
   try {
     return await prismaRaw.$transaction(async (tx) => {
       const updated = await tx.tag.update({ where: { id }, data: { name, color: input.color, description: input.description?.trim().slice(0, 180), appliesToContacts, appliesToOpportunities } });

@@ -29,10 +29,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ web
   const rawTags = valueAt(payload, mapping.tags || "tags");
   const tags = Array.isArray(rawTags) ? rawTags.map(text).filter(Boolean) : text(rawTags).split(",").map((tag) => tag.trim()).filter(Boolean);
   const existing = await prisma.contact.findFirst({ where: { organizationId: webhook.organizationId, OR: [...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])] } });
+  await syncTags(webhook.organizationId, tags, "contact");
   const contact = existing
     ? await prisma.contact.update({ where: { id: existing.id }, data: { name: existing.name === "Novo lead" ? name : existing.name, company: existing.company || company, email: existing.email || email, phone: existing.phone || phone, tags: JSON.stringify([...new Set([...JSON.parse(existing.tags || "[]"), ...tags])]) } })
     : await prisma.contact.create({ data: { organizationId: webhook.organizationId, name, phone, email, company, tags: JSON.stringify(tags), ownerId: await assignNextOwner(webhook.organizationId) } });
-  await syncTags(webhook.organizationId, tags);
   if (!existing) await triggerAutomations(webhook.organizationId, "CONTACT_CREATED", { contactId: contact.id });
   for (const tag of tags) await triggerAutomations(webhook.organizationId, "TAG_ADDED", { contactId: contact.id, tag });
   await logWebhook({ organizationId: webhook.organizationId, source: "inbound-form", event: webhook.name, statusCode: 200, detail: existing ? "Contato atualizado" : "Lead criado", payload });

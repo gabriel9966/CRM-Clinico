@@ -865,13 +865,16 @@ model AutomationRun {
   // Preenchido pelos gatilhos de agenda para tornar lembretes idempotentes:
   // uma mesma automação só roda uma vez por agendamento.
   appointmentId String?
+  // Lembretes pré-agendamento são idempotentes para um horário específico. Ao
+  // reagendar, o novo horário pode gerar um novo lembrete sem duplicar o antigo.
+  appointmentStartAt DateTime?
   payload       String? // JSON bruto recebido (gatilho de webhook), guardado pra o nó de código acessar
 
   schedule AutomationSchedule?
 
   @@index([automationId])
   @@index([appointmentId])
-  @@unique([automationId, appointmentId])
+  @@unique([automationId, appointmentId, appointmentStartAt])
 }
 
 // Um passo de "espera" agendado: quando o motor chega num nó de delay, grava

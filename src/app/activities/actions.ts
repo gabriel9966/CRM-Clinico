@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireOrgUser } from "@/lib/auth";
+import { hasModulePermission } from "@/lib/access";
 import {
   ensureTaskLists,
   getListCards,
@@ -22,6 +23,12 @@ export type ActivityInput = {
   /** Coluna do quadro; omitido = não mexe (na edição) ou primeira coluna "a fazer" (na criação). */
   listId?: string | null;
 };
+
+async function requireActivityPermission(write = true) {
+  const user = await requireOrgUser();
+  if (!hasModulePermission(user, write ? "agenda.write" : "agenda.read")) throw new Error("Sem permissão para acessar tarefas e atividades.");
+  return user;
+}
 
 function revalidateAll() {
   revalidatePath("/activities");
@@ -60,7 +67,7 @@ async function resolveList(organizationId: string, listId: string | null | undef
 }
 
 export async function createActivity(data: ActivityInput) {
-  const { organizationId } = await requireOrgUser();
+  const { organizationId } = await requireActivityPermission();
   await assertActivityRefs(organizationId, data);
   const { list } = await resolveList(organizationId, data.listId);
   await prisma.activity.create({
@@ -82,7 +89,7 @@ export async function createActivity(data: ActivityInput) {
 }
 
 export async function updateActivity(id: string, data: ActivityInput) {
-  const { organizationId } = await requireOrgUser();
+  const { organizationId } = await requireActivityPermission();
   await assertActivityRefs(organizationId, data);
   const move =
     data.listId !== undefined && data.listId !== null
@@ -109,7 +116,7 @@ export async function updateActivity(id: string, data: ActivityInput) {
 
 /** Marcar/desmarcar o check leva o cartão para a primeira coluna do tipo certo. */
 export async function toggleActivityDone(id: string, done: boolean) {
-  const { organizationId } = await requireOrgUser();
+  const { organizationId } = await requireActivityPermission();
   const lists = await ensureTaskLists(organizationId);
   const target = lists.find((l) => l.isDone === done);
   await prisma.activity.updateMany({
@@ -120,7 +127,7 @@ export async function toggleActivityDone(id: string, done: boolean) {
 }
 
 export async function deleteActivity(id: string) {
-  const { organizationId } = await requireOrgUser();
+  const { organizationId } = await requireActivityPermission();
   await prisma.activity.deleteMany({ where: { id, organizationId } });
   revalidateAll();
 }
@@ -131,7 +138,7 @@ const clean = (s: string) => s.trim().slice(0, 80);
 
 /** Criação rápida: só o título; vencimento padrão = amanhã neste horário. */
 export async function createTaskCard(listId: string, title: string, assigneeId?: string | null) {
-  const { organizationId } = await requireOrgUser();
+  const { organizationId } = await requireActivityPermission();
   const text = title.trim().slice(0, 200);
   if (!text) return;
   const { list } = await resolveList(organizationId, listId);
@@ -160,7 +167,7 @@ export async function createTaskCard(listId: string, title: string, assigneeId?:
  * não depende de números fracionários.
  */
 export async function moveActivity(id: string, toListId: string, beforeId: string | null) {
-  const { organizationId } = await requireOrgUser();
+  const { organizationId } = await requireActivityPermission();
   const { list, lists } = await resolveList(organizationId, toListId);
   const card = await prisma.activity.findFirst({ where: { id, organizationId }, select: { id: true } });
   if (!card) throw new Error("Tarefa não encontrada.");
@@ -185,7 +192,7 @@ export async function moveActivity(id: string, toListId: string, beforeId: strin
 }
 
 export async function createTaskList(name: string, isDone = false) {
-  const { organizationId } = await requireOrgUser();
+  const { organizationId } = await requireActivityPermission();
   const text = clean(name);
   if (!text) return;
   const lists = await ensureTaskLists(organizationId);
@@ -200,7 +207,7 @@ export async function createTaskList(name: string, isDone = false) {
 }
 
 export async function renameTaskList(id: string, name: string) {
-  const { organizationId } = await requireOrgUser();
+  const { organizationId } = await requireActivityPermission();
   const text = clean(name);
   if (!text) return;
   await prisma.taskList.updateMany({ where: { id, organizationId }, data: { name: text } });
@@ -208,7 +215,7 @@ export async function renameTaskList(id: string, name: string) {
 }
 
 export async function moveTaskList(id: string, dir: -1 | 1) {
-  const { organizationId } = await requireOrgUser();
+  const { organizationId } = await requireActivityPermission();
   const lists = await ensureTaskLists(organizationId);
   const index = lists.findIndex((l) => l.id === id);
   const swap = lists[index + dir];
@@ -221,7 +228,7 @@ export async function moveTaskList(id: string, dir: -1 | 1) {
 
 /** Exclui a coluna; os cartões vão para outra coluna do mesmo tipo (pendente/concluída). */
 export async function deleteTaskList(id: string) {
-  const { organizationId } = await requireOrgUser();
+  const { organizationId } = await requireActivityPermission();
   const lists = await ensureTaskLists(organizationId);
   const list = lists.find((l) => l.id === id);
   if (!list) return;
@@ -242,11 +249,11 @@ export async function deleteTaskList(id: string) {
 
 // Leitura para o quadro (a organização vem da sessão).
 export async function fetchTaskBoard(filter: TaskBoardFilter) {
-  const { organizationId } = await requireOrgUser();
+  const { organizationId } = await requireActivityPermission(false);
   return getTaskBoard(organizationId, filter);
 }
 
 export async function fetchListCards(listId: string, skip: number, filter: TaskBoardFilter) {
-  const { organizationId } = await requireOrgUser();
+  const { organizationId } = await requireActivityPermission(false);
   return getListCards(organizationId, listId, { skip, filter });
 }

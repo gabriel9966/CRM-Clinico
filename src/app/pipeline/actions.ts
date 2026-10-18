@@ -10,6 +10,7 @@ import { recordStageChange } from "@/lib/pipeline-history";
 import { actorOf, audit } from "@/lib/audit";
 import { softDeleteOpportunity } from "@/lib/soft-delete";
 import { syncTags } from "@/lib/crm-catalog";
+import { canAccessPipeline, hasModulePermission } from "@/lib/access";
 import type { ImportSummary } from "@/app/contacts/actions";
 
 export type OpportunityStageHistoryDTO = {
@@ -31,6 +32,8 @@ export async function getOpportunityStageHistory(opportunityId: string): Promise
     select: { id: true },
   });
   if (!opportunity) return [];
+  const scoped = await prisma.opportunity.findFirst({ where: { id: opportunityId, organizationId: user.organizationId }, select: { pipelineId: true } });
+  if (!hasModulePermission(user, "pipeline.read") || !scoped || !(await canAccessPipeline(user, scoped.pipelineId))) return [];
   const history = await prisma.opportunityStageHistory.findMany({
     where: { opportunityId, organizationId: user.organizationId },
     include: { stage: { select: { id: true, label: true, color: true, order: true } } },
@@ -61,13 +64,13 @@ function cleanGroup(group?: string) {
 }
 
 export async function setPipelineGroup(pipelineId: string, group: string) {
-  const { organizationId } = await requireOrgUser();
+  const { organizationId } = await requireAdminUser();
   await prisma.pipeline.updateMany({ where: { id: pipelineId, organizationId }, data: { groupName: cleanGroup(group) } });
   revalidatePath("/pipeline");
 }
 
 export async function createPipeline(name: string, group?: string) {
-  const { organizationId } = await requireOrgUser();
+  const { organizationId } = await requireAdminUser();
   const trimmed = name.trim();
   if (!trimmed) return;
 
@@ -85,7 +88,7 @@ export async function createPipeline(name: string, group?: string) {
 }
 
 export async function renamePipeline(pipelineId: string, name: string) {
-  const { organizationId } = await requireOrgUser();
+  const { organizationId } = await requireAdminUser();
   const trimmed = name.trim();
   if (!trimmed) return;
   await prisma.pipeline.updateMany({ where: { id: pipelineId, organizationId }, data: { name: trimmed } });
@@ -93,7 +96,7 @@ export async function renamePipeline(pipelineId: string, name: string) {
 }
 
 export async function deletePipeline(pipelineId: string) {
-  const { organizationId } = await requireOrgUser();
+  const { organizationId } = await requireAdminUser();
   const count = await prisma.pipeline.count({ where: { organizationId } });
   if (count <= 1) return;
   await prisma.pipeline.deleteMany({ where: { id: pipelineId, organizationId } });
@@ -105,7 +108,7 @@ async function assertPipelineInOrg(pipelineId: string, organizationId: string) {
 }
 
 export async function addStage(pipelineId: string) {
-  const { organizationId } = await requireOrgUser();
+  const { organizationId } = await requireAdminUser();
   if (!(await assertPipelineInOrg(pipelineId, organizationId))) return;
 
   const last = await prisma.stage.findFirst({ where: { pipelineId }, orderBy: { order: "desc" } });
@@ -121,7 +124,7 @@ export async function addStage(pipelineId: string) {
 }
 
 export async function renameStage(stageId: string, label: string) {
-  const { organizationId } = await requireOrgUser();
+  const { organizationId } = await requireAdminUser();
   const trimmed = label.trim();
   if (!trimmed) return;
   const stage = await prisma.stage.findFirst({ where: { id: stageId }, include: { pipeline: true } });
@@ -131,7 +134,7 @@ export async function renameStage(stageId: string, label: string) {
 }
 
 export async function setStageColor(stageId: string, color: string) {
-  const { organizationId } = await requireOrgUser();
+  const { organizationId } = await requireAdminUser();
   const stage = await prisma.stage.findFirst({ where: { id: stageId }, include: { pipeline: true } });
   if (!stage || stage.pipeline.organizationId !== organizationId) return;
   await prisma.stage.update({ where: { id: stageId }, data: { color } });
@@ -147,7 +150,7 @@ export async function configureStage(stageId: string, input: { requiredFields: s
 }
 
 export async function moveStage(pipelineId: string, stageId: string, direction: -1 | 1) {
-  const { organizationId } = await requireOrgUser();
+  const { organizationId } = await requireAdminUser();
   if (!(await assertPipelineInOrg(pipelineId, organizationId))) return;
 
   const stages = await prisma.stage.findMany({ where: { pipelineId }, orderBy: { order: "asc" } });
@@ -165,7 +168,7 @@ export async function moveStage(pipelineId: string, stageId: string, direction: 
 }
 
 export async function deleteStage(pipelineId: string, stageId: string) {
-  const { organizationId } = await requireOrgUser();
+  const { organizationId } = await requireAdminUser();
   if (!(await assertPipelineInOrg(pipelineId, organizationId))) return;
 
   const stages = await prisma.stage.findMany({ where: { pipelineId }, orderBy: { order: "asc" } });
@@ -241,9 +244,10 @@ async function assertStagePolicy(stageId: string, data: OpportunityInput, user: 
 
 export async function createOpportunity(data: OpportunityInput) {
   const user = await requireOrgUser(); const { organizationId } = user;
+  if (!hasModulePermission(user, "pipeline.write") || !(await canAccessPipeline(user, data.pipelineId, "edit"))) throw new Error("Sem permissão para alterar este pipeline.");
   const lossReason = await assertOpportunityRefs(organizationId, data);
   await assertStagePolicy(data.stageId, data, user);
-  await syncTags(organizationId, data.tags);
+  await syncTags(organizationId, data.tags, "opportunity");
   const opp = await prisma.opportunity.create({
     data: {
       organizationId,
@@ -274,9 +278,10 @@ export async function updateOpportunity(id: string, data: OpportunityInput) {
   const user = await requireOrgUser(); const { organizationId } = user;
   const before = await prisma.opportunity.findFirst({ where: { id, organizationId } });
   if (!before) return;
+  if (!hasModulePermission(user, "pipeline.write") || !(await canAccessPipeline(user, before.pipelineId, "edit")) || !(await canAccessPipeline(user, data.pipelineId, "edit"))) throw new Error("Sem permissão para alterar este pipeline.");
   const lossReason = await assertOpportunityRefs(organizationId, data);
   await assertStagePolicy(data.stageId, data, user);
-  await syncTags(organizationId, data.tags);
+  await syncTags(organizationId, data.tags, "opportunity");
 
   const opp = await prisma.opportunity.update({
     where: { id },
@@ -308,6 +313,8 @@ export async function updateOpportunity(id: string, data: OpportunityInput) {
 export async function deleteOpportunity(id: string) {
   const user = await requireOrgUser();
   const { organizationId } = user;
+  const opportunity = await prisma.opportunity.findFirst({ where: { id, organizationId }, select: { pipelineId: true } });
+  if (!hasModulePermission(user, "pipeline.write") || !opportunity || !(await canAccessPipeline(user, opportunity.pipelineId, "edit"))) throw new Error("Sem permissão para excluir este negócio.");
   const res = await softDeleteOpportunity(prisma, organizationId, id);
   if (res.count > 0) {
     await audit(organizationId, { action: "opportunity.deleted", entity: "Opportunity", entityId: id, ...actorOf(user) });
@@ -325,6 +332,7 @@ export async function deleteOpportunity(id: string) {
 export async function importOpportunitiesCsv(csvText: string, defaultPipelineId: string): Promise<ImportSummary> {
   const user = await requireOrgUser();
   const { organizationId } = user;
+  if (!hasModulePermission(user, "pipeline.write") || !hasModulePermission(user, "data.import_export") || !(await canAccessPipeline(user, defaultPipelineId, "edit"))) throw new Error("Sem permissão para importar oportunidades neste pipeline.");
   const rows = importRows(csvText, ["title"]);
 
   // Carrega só os contatos citados no CSV (por e-mail ou nome), em vez de todos
@@ -399,6 +407,9 @@ export async function importOpportunitiesCsv(csvText: string, defaultPipelineId:
       errors.push(`Linha ${line}: pipeline "${row.pipeline || "padrão"}" ${pipelineMatches.length ? "ambíguo" : "não encontrado"}.`);
       continue;
     }
+    if (!(await canAccessPipeline(user, pipeline.id, "edit"))) {
+      skipped++; errors.push(`Linha ${line}: sem acesso ao pipeline "${pipeline.name}".`); continue;
+    }
 
     const stageMatches = row.stage?.trim()
       ? pipeline.stages.filter((s) => s.label.toLowerCase() === row.stage.trim().toLowerCase())
@@ -434,7 +445,7 @@ export async function importOpportunitiesCsv(csvText: string, defaultPipelineId:
     if (duplicate) {
       skipped++; errors.push(`Linha ${line}: oportunidade já existe para este contato e pipeline.`); continue;
     }
-    await syncTags(organizationId, tags);
+    await syncTags(organizationId, tags, "opportunity");
 
     try {
       await prisma.$transaction(async (tx) => {
@@ -470,6 +481,7 @@ export async function moveOpportunityStage(id: string, stageId: string) {
   const user = await requireOrgUser(); const { organizationId } = user;
   const existing = await prisma.opportunity.findFirst({ where: { id, organizationId } });
   if (!existing) return;
+  if (!hasModulePermission(user, "pipeline.write") || !(await canAccessPipeline(user, existing.pipelineId, "edit"))) throw new Error("Sem permissão para alterar este pipeline.");
   // A etapa de destino precisa ser do mesmo pipeline (e da mesma organização).
   const target = await prisma.stage.findFirst({
     where: { id: stageId, pipelineId: existing.pipelineId, pipeline: { organizationId } },

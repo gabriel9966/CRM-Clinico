@@ -93,17 +93,21 @@ export function FlowEditor({
   automation,
   pipelines,
   team,
+  professionals,
+  procedures,
   webhookPath,
 }: {
   automation: AutomationDTO;
   pipelines: PipelineDTO[];
   team: TeamMemberDTO[];
+  professionals: { id: string; name: string }[];
+  procedures: { id: string; name: string }[];
   /** Caminho do webhook já com o token (ex.: /api/webhooks/automation/ID?token=...). */
   webhookPath: string;
 }) {
   return (
     <ReactFlowProvider>
-      <Editor automation={automation} pipelines={pipelines} team={team} webhookPath={webhookPath} />
+      <Editor automation={automation} pipelines={pipelines} team={team} professionals={professionals} procedures={procedures} webhookPath={webhookPath} />
     </ReactFlowProvider>
   );
 }
@@ -112,11 +116,15 @@ function Editor({
   automation,
   pipelines,
   team,
+  professionals,
+  procedures,
   webhookPath,
 }: {
   automation: AutomationDTO;
   pipelines: PipelineDTO[];
   team: TeamMemberDTO[];
+  professionals: { id: string; name: string }[];
+  procedures: { id: string; name: string }[];
   webhookPath: string;
 }) {
   const router = useRouter();
@@ -345,6 +353,8 @@ function Editor({
               config={triggerConfig}
               pipelines={pipelines}
               team={team}
+              professionals={professionals}
+              procedures={procedures}
               webhookUrl={origin ? `${origin}${webhookPath}` : webhookPath}
               webhookReady={savedTrigger === "WEBHOOK_RECEIVED" && trigger === "WEBHOOK_RECEIVED" && enabled && edges.some((edge) => edge.source === "trigger")}
               webhookNotice={!enabled ? "Ative a automação para receber chamadas." : !edges.some((edge) => edge.source === "trigger") ? "Conecte o gatilho à primeira etapa e salve o fluxo." : "Salve o fluxo com este gatilho para ativar a URL."}
@@ -371,6 +381,8 @@ function TriggerInspector({
   config,
   pipelines,
   team,
+  professionals,
+  procedures,
   webhookUrl,
   webhookReady,
   webhookNotice,
@@ -381,6 +393,8 @@ function TriggerInspector({
   config: Record<string, unknown>;
   pipelines: PipelineDTO[];
   team: TeamMemberDTO[];
+  professionals: { id: string; name: string }[];
+  procedures: { id: string; name: string }[];
   webhookUrl: string;
   webhookReady: boolean;
   webhookNotice: string;
@@ -510,6 +524,20 @@ function TriggerInspector({
             <select value={String(config.ownerId ?? "")} onChange={(event) => onChange({ ownerId: event.target.value || undefined })}>
               <option value="">Qualquer responsável</option>
               {team.filter((member) => member.isActive).map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <label>Profissional (opcional)</label>
+            <select value={String(config.professionalId ?? "")} onChange={(event) => onChange({ professionalId: event.target.value || undefined })}>
+              <option value="">Qualquer profissional</option>
+              {professionals.map((professional) => <option key={professional.id} value={professional.id}>{professional.name}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <label>Procedimento (opcional)</label>
+            <select value={String(config.procedureId ?? "")} onChange={(event) => onChange({ procedureId: event.target.value || undefined })}>
+              <option value="">Qualquer procedimento</option>
+              {procedures.map((procedure) => <option key={procedure.id} value={procedure.id}>{procedure.name}</option>)}
             </select>
           </div>
           <div className="field">

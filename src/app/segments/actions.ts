@@ -3,10 +3,12 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireOrgUser } from "@/lib/auth";
+import { hasModulePermission } from "@/lib/access";
 import { segmentFiltersSchema, evaluateSegment, type SegmentCondition } from "@/lib/segments";
 
 export async function createSegment(name: string, entity: "CONTACT" | "OPPORTUNITY", conditions: SegmentCondition[]) {
-  const { organizationId } = await requireOrgUser();
+  const user = await requireOrgUser(); const { organizationId } = user;
+  if (!hasModulePermission(user, "contacts.write")) throw new Error("Sem permissão para gerir segmentos.");
   const trimmed = name.trim();
   if (!trimmed) return;
   const filters = segmentFiltersSchema.parse({ conditions });
@@ -18,7 +20,8 @@ export async function createSegment(name: string, entity: "CONTACT" | "OPPORTUNI
 }
 
 export async function deleteSegment(id: string) {
-  const { organizationId } = await requireOrgUser();
+  const user = await requireOrgUser(); const { organizationId } = user;
+  if (!hasModulePermission(user, "contacts.write")) throw new Error("Sem permissão para gerir segmentos.");
   await prisma.segment.deleteMany({ where: { id, organizationId } });
   revalidatePath("/contacts");
 }
@@ -27,7 +30,8 @@ export async function deleteSegment(id: string) {
 // usa mais isto (filtra paginado pelo servidor via segmentId); fica para
 // quem precisar do conjunto completo.
 export async function applySegment(id: string): Promise<string[]> {
-  const { organizationId } = await requireOrgUser();
+  const user = await requireOrgUser(); const { organizationId } = user;
+  if (!hasModulePermission(user, "contacts.read")) return [];
   const segment = await prisma.segment.findFirst({ where: { id, organizationId } });
   if (!segment) return [];
   const matches = await evaluateSegment(organizationId, segment.entity, segment.filters);

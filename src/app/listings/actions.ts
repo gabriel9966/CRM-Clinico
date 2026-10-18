@@ -32,7 +32,8 @@ import type { ConversationChannelInfo } from "@/lib/types";
 const sanitize = (s: string | undefined, max = 100) => (s ? s.slice(0, max) : undefined);
 
 export async function fetchContactsPage(query: Omit<ContactListQuery, "extraWhere"> & { segmentId?: string }) {
-  const { organizationId } = await requireOrgUser();
+  const user = await requireOrgUser(); const { organizationId } = user;
+  if (!hasModulePermission(user, "contacts.read")) return { items: [], nextCursor: null, total: 0 };
   const { segmentId, ...rest } = query;
 
   // Lista salva: o filtro roda no banco, junto com a busca e a paginação.
@@ -54,21 +55,26 @@ export async function fetchContactsPage(query: Omit<ContactListQuery, "extraWher
 
 export async function fetchContactDetail(contactId: string) {
   const user = await requireOrgUser();
+  if (!hasModulePermission(user, "contacts.read")) return null;
   return getContactDetail(user.organizationId, { id: user.id, role: user.role }, contactId);
 }
 
 export async function fetchDuplicateGroups() {
-  const { organizationId } = await requireOrgUser();
+  const user = await requireOrgUser(); const { organizationId } = user;
+  if (!hasModulePermission(user, "contacts.read")) return [];
   return findDuplicateContacts(organizationId);
 }
 
 export async function fetchStageCards(stageId: string, query: StageCardsQuery = {}) {
-  const { organizationId } = await requireOrgUser();
+  const user = await requireOrgUser(); const { organizationId } = user;
+  const stage = await prisma.stage.findFirst({ where: { id: stageId, pipeline: { organizationId } }, select: { pipelineId: true } });
+  if (!hasModulePermission(user, "pipeline.read") || !stage || !(await canAccessPipeline(user, stage.pipelineId))) return { items: [], nextCursor: null, total: 0 };
   return getStageCards(organizationId, stageId, { ...query, q: sanitize(query.q) });
 }
 
 export async function fetchStageSummaries(pipelineId: string) {
-  const { organizationId } = await requireOrgUser();
+  const user = await requireOrgUser(); const { organizationId } = user;
+  if (!hasModulePermission(user, "pipeline.read") || !(await canAccessPipeline(user, pipelineId))) return [];
   return getStageSummaries(organizationId, pipelineId);
 }
 
@@ -112,7 +118,8 @@ export async function fetchConversations(query: {
 
 export async function fetchThread(contactId: string, cursor?: string) {
   const user = await requireOrgUser();
-  return getMessagesPage(user.organizationId, { id: user.id, role: user.role }, contactId, { cursor });
+  if (!hasModulePermission(user, "conversations.read")) return null;
+  return getMessagesPage(user.organizationId, { id: user.id, role: hasModulePermission(user, "conversations.manage") ? "ADMIN" : user.role }, contactId, { cursor });
 }
 
 export async function fetchConversationThread(conversationId: string, cursor?: string) {
@@ -120,15 +127,17 @@ export async function fetchConversationThread(conversationId: string, cursor?: s
   if (!hasModulePermission(user, "conversations.read")) return null;
   const conversation = await prisma.conversation.findFirst({ where: { id: conversationId, organizationId: user.organizationId }, select: { connectionId: true } });
   if (!conversation || (conversation.connectionId && !(await canAccessConnection(user, conversation.connectionId)))) return null;
-  return getConversationMessagesPage(user.organizationId, { id: user.id, role: user.role }, conversationId, { cursor });
+  return getConversationMessagesPage(user.organizationId, { id: user.id, role: hasModulePermission(user, "conversations.manage") ? "ADMIN" : user.role }, conversationId, { cursor });
 }
 
 export async function fetchActivities(filter: ActivityFilter, cursor?: string) {
-  const { organizationId } = await requireOrgUser();
+  const user = await requireOrgUser(); const { organizationId } = user;
+  if (!hasModulePermission(user, "agenda.read")) return { items: [], nextCursor: null, total: 0 };
   return getActivitiesPage(organizationId, { filter, cursor });
 }
 
 export async function fetchAppointments(range: AppointmentRange, cursor?: string) {
-  const { organizationId } = await requireOrgUser();
+  const user = await requireOrgUser(); const { organizationId } = user;
+  if (!hasModulePermission(user, "agenda.read")) return { items: [], nextCursor: null, total: 0 };
   return getAppointmentsPage(organizationId, { range, cursor });
 }

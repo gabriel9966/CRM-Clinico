@@ -91,8 +91,10 @@ export async function sendMessage(conversationId: string, text: string): Promise
  * anterior é mantida no histórico; o reenvio sempre vira uma nova tentativa. */
 export async function retryFailedMessage(conversationId: string, messageId: string): Promise<SendOutcome> {
   const user = await requireOrgUser();
+  if (!hasModulePermission(user, "conversations.reply")) return { ok: false, code: "sem_permissao", error: "Você não tem permissão para responder atendimentos." };
   const conversation = await getConversationForUser(user, conversationId);
   if (!conversation || !conversation.connectionId) return { ok: false, code: "sem_permissao", error: "Atendimento ou canal não disponível para reenvio." };
+  if (!(await canAccessConnection(user, conversation.connectionId, "send"))) return { ok: false, code: "sem_permissao", error: "Você não tem permissão para enviar por esta instância." };
   const message = await prisma.message.findFirst({
     where: { id: messageId, organizationId: user.organizationId, conversationId, direction: "out", status: "failed" },
     select: { text: true },
@@ -108,8 +110,9 @@ export async function retryFailedMessage(conversationId: string, messageId: stri
 export async function assignConversation(conversationId: string, ownerId: string | null, mode: "assign" | "transfer" | "claim" = "assign") {
   const user = await requireOrgUser();
   if (!hasModulePermission(user, "conversations.manage") && mode !== "claim") return { ok: false, error: "Você não tem permissão para gerir atendimentos." };
-  const conversation = await prisma.conversation.findFirst({ where: { id: conversationId, organizationId: user.organizationId }, select: { ownerId: true } });
+  const conversation = await prisma.conversation.findFirst({ where: { id: conversationId, organizationId: user.organizationId }, select: { ownerId: true, connectionId: true } });
   if (!conversation) return { ok: false, error: "Atendimento não encontrado." };
+  if (conversation.connectionId && !(await canAccessConnection(user, conversation.connectionId))) return { ok: false, error: "Você não tem acesso a esta instância." };
   if (mode === "claim") ownerId = user.id;
   if (user.role !== "ADMIN" && ownerId !== user.id) return { ok: false, error: "Somente administradores podem transferir atendimentos." };
   if (ownerId && !(await prisma.user.findFirst({ where: { id: ownerId, organizationId: user.organizationId, isActive: true }, select: { id: true } }))) {
@@ -124,6 +127,7 @@ export async function assignConversation(conversationId: string, ownerId: string
 
 export async function setConversationStatus(conversationId: string, status: "OPEN" | "CLOSED") {
   const user = await requireOrgUser();
+  if (!hasModulePermission(user, "conversations.manage")) return { ok: false, error: "Você não tem permissão para finalizar atendimentos." };
   const conversation = await getConversationForUser(user, conversationId);
   if (!conversation) return { ok: false, error: "Atendimento não encontrado." };
   await prisma.conversation.update({ where: { id: conversationId }, data: { status, closedAt: status === "CLOSED" ? new Date() : null } });
@@ -161,6 +165,7 @@ export async function fetchConversationEvents(conversationId: string): Promise<C
 
 export async function updateConversationTags(conversationId: string, tags: string[]) {
   const user = await requireOrgUser();
+  if (!hasModulePermission(user, "conversations.manage")) return { ok: false, error: "Você não tem permissão para alterar tags." };
   const conversation = await getConversationForUser(user, conversationId);
   if (!conversation) return { ok: false, error: "Atendimento não encontrado." };
   const contact = await prisma.contact.findFirst({ where: { id: conversation.contactId, organizationId: user.organizationId }, select: { tags: true } });
@@ -168,8 +173,8 @@ export async function updateConversationTags(conversationId: string, tags: strin
   let previous: string[] = [];
   try { previous = JSON.parse(contact.tags) as string[]; } catch { previous = []; }
   const next = [...new Set(tags.map((tag) => tag.trim()).filter(Boolean))];
+  await syncTags(user.organizationId, next, "contact");
   await prisma.contact.update({ where: { id: conversation.contactId }, data: { tags: JSON.stringify(next) } });
-  await syncTags(user.organizationId, next);
   for (const tag of next.filter((tag) => !previous.includes(tag))) {
     await audit(user.organizationId, { action: "conversation.tag_added", entity: "Conversation", entityId: conversationId, ...actorOf(user), meta: { tag } });
   }

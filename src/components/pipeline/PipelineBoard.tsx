@@ -73,6 +73,7 @@ export function PipelineBoard({
   customFieldDefs,
   lossReasons,
   tags,
+  automations,
 }: {
   pipelines: PipelineDTO[];
   initialPipelineId: string;
@@ -81,6 +82,7 @@ export function PipelineBoard({
   customFieldDefs: CustomFieldDefinitionDTO[];
   lossReasons: { id: string; name: string }[];
   tags: string[];
+  automations: { id: string; name: string; enabled: boolean }[];
 }) {
   const router = useRouter();
   const [currentPipelineId, setCurrentPipelineId] = useState(initialPipelineId || pipelines[0]?.id || "");
@@ -493,6 +495,9 @@ export function PipelineBoard({
           onMoveStage={(stageId, dir) => run(() => moveStage(modal.pipelineId, stageId, dir))}
           onDeleteStage={(stageId) => run(() => deleteStage(modal.pipelineId, stageId))}
           onConfigureStage={(stageId, input) => run(() => configureStage(stageId, input))}
+          team={team}
+          customFieldDefs={customFieldDefs}
+          automations={automations}
           onDeletePipeline={() =>
             run(() => deletePipeline(modal.pipelineId)).then(() => {
               setCurrentPipelineId(pipelines.find((p) => p.id !== modal.pipelineId)?.id ?? "");
@@ -804,6 +809,9 @@ function PipelineManageModal({
   onMoveStage,
   onDeleteStage,
   onConfigureStage,
+  team,
+  customFieldDefs,
+  automations,
   onDeletePipeline,
 }: {
   pipeline: PipelineDTO;
@@ -820,11 +828,16 @@ function PipelineManageModal({
   onMoveStage: (stageId: string, dir: -1 | 1) => void;
   onDeleteStage: (stageId: string) => void;
   onConfigureStage: (stageId: string, input: { requiredFields: string[]; allowedTeams: string[]; requireLossReason: boolean; automationIds: string[] }) => void;
+  team: TeamMemberDTO[];
+  customFieldDefs: CustomFieldDefinitionDTO[];
+  automations: { id: string; name: string; enabled: boolean }[];
   onDeletePipeline: () => void;
 }) {
   const stages = [...pipeline.stages].sort((a, b) => a.order - b.order);
   const [openColorFor, setOpenColorFor] = useState<string | null>(null);
   const [groupDraft, setGroupDraft] = useState(pipeline.group);
+  const [configuringStageId, setConfiguringStageId] = useState<string | null>(null);
+  const configuringStage = stages.find((stage) => stage.id === configuringStageId) ?? null;
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -883,15 +896,7 @@ function PipelineManageModal({
                   <span className="muted" style={{ fontSize: 11, flexShrink: 0 }}>
                     {count} negócio{count === 1 ? "" : "s"}
                   </span>
-                  <button type="button" className="btn small" disabled={busy} onClick={() => {
-                    const fields = prompt("Campos obrigatórios (title, value, ownerId, expectedClose ou chaves de campos extras), separados por vírgula:", s.requiredFields.join(","));
-                    if (fields === null) return;
-                    const teams = prompt("Times autorizados (vazio = todos), separados por vírgula:", s.allowedTeams.join(","));
-                    if (teams === null) return;
-                    const automations = prompt("IDs de automações associadas a esta etapa (referência), separados por vírgula:", s.automationIds.join(","));
-                    if (automations === null) return;
-                    onConfigureStage(s.id, { requiredFields: fields.split(",").map((v) => v.trim()).filter(Boolean), allowedTeams: teams.split(",").map((v) => v.trim()).filter(Boolean), automationIds: automations.split(",").map((v) => v.trim()).filter(Boolean), requireLossReason: confirm("Exigir motivo de perda para entrar nesta etapa?") });
-                  }}>Regras</button>
+                  <button type="button" className="btn small" disabled={busy} onClick={() => setConfiguringStageId(s.id)}>Configurar</button>
                   <button
                     type="button"
                     className="icon-btn"
@@ -942,6 +947,67 @@ function PipelineManageModal({
           <div style={{ flex: 1 }} />
           <button type="button" className="btn primary" onClick={onClose}>Concluir</button>
         </div>
+      </div>
+      {configuringStage && (
+        <StageConfigurationModal
+          stage={configuringStage}
+          teams={[...new Set(team.map((member) => member.team).filter(Boolean))]}
+          customFields={customFieldDefs.filter((field) => field.entity === "OPPORTUNITY")}
+          automations={automations}
+          busy={busy}
+          onClose={() => setConfiguringStageId(null)}
+          onSave={(input) => {
+            onConfigureStage(configuringStage.id, input);
+            setConfiguringStageId(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function StageConfigurationModal({
+  stage, teams, customFields, automations, busy, onClose, onSave,
+}: {
+  stage: PipelineDTO["stages"][number];
+  teams: string[];
+  customFields: CustomFieldDefinitionDTO[];
+  automations: { id: string; name: string; enabled: boolean }[];
+  busy: boolean;
+  onClose: () => void;
+  onSave: (input: { requiredFields: string[]; allowedTeams: string[]; requireLossReason: boolean; automationIds: string[] }) => void;
+}) {
+  const [requiredFields, setRequiredFields] = useState(stage.requiredFields);
+  const [allowedTeams, setAllowedTeams] = useState(stage.allowedTeams);
+  const [requireLossReason, setRequireLossReason] = useState(stage.requireLossReason);
+  const [automationIds, setAutomationIds] = useState(stage.automationIds);
+  const toggle = (value: string, values: string[], setValues: (next: string[]) => void) =>
+    setValues(values.includes(value) ? values.filter((item) => item !== value) : [...values, value]);
+  const availableFields = [
+    ["title", "Título do negócio"], ["value", "Valor"], ["ownerId", "Responsável"], ["expectedClose", "Previsão de fechamento"],
+    ...customFields.map((field) => [field.key, field.label]),
+  ] as Array<[string, string]>;
+
+  return (
+    <div className="modal-overlay stage-config-overlay" onClick={onClose}>
+      <div className="modal stage-config-modal" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-head"><div><h2>Configurar etapa</h2><p className="muted">{stage.label} · regras aplicadas quando um negócio entra nesta etapa.</p></div><button className="close-x" onClick={onClose}><Icon.close /></button></div>
+        <div className="modal-body stage-config-body">
+          <section className="stage-rule-section">
+            <h3>Campos obrigatórios</h3><p>O card só poderá ser movido quando todos os campos selecionados estiverem preenchidos.</p>
+            <div className="stage-rule-options">{availableFields.map(([key, label]) => <label key={key}><input type="checkbox" checked={requiredFields.includes(key)} onChange={() => toggle(key, requiredFields, setRequiredFields)} />{label}</label>)}</div>
+          </section>
+          <section className="stage-rule-section">
+            <h3>Quem pode mover para esta etapa</h3><p>Sem seleção, qualquer equipe com acesso ao pipeline pode mover cards.</p>
+            <div className="stage-rule-options">{teams.length ? teams.map((team) => <label key={team}><input type="checkbox" checked={allowedTeams.includes(team)} onChange={() => toggle(team, allowedTeams, setAllowedTeams)} />{team}</label>) : <span className="muted">Nenhuma equipe cadastrada.</span>}</div>
+          </section>
+          <section className="stage-rule-section compact"><label className="stage-rule-switch"><input type="checkbox" checked={requireLossReason} onChange={(event) => setRequireLossReason(event.target.checked)} /><span><strong>Exigir motivo de perda</strong><small>Use normalmente apenas na etapa “Perdido”.</small></span></label></section>
+          <section className="stage-rule-section">
+            <h3>Automações relacionadas</h3><p>Registre quais automações devem ser revisadas para esta etapa. A execução do gatilho “Mudança de etapa” continua configurada na própria automação.</p>
+            <div className="stage-rule-options">{automations.length ? automations.map((automation) => <label key={automation.id}><input type="checkbox" checked={automationIds.includes(automation.id)} onChange={() => toggle(automation.id, automationIds, setAutomationIds)} />{automation.name}{!automation.enabled && <small> pausada</small>}</label>) : <span className="muted">Nenhuma automação cadastrada.</span>}</div>
+          </section>
+        </div>
+        <div className="modal-foot"><button className="btn" onClick={onClose}>Cancelar</button><div style={{ flex: 1 }} /><button className="btn primary" disabled={busy} onClick={() => onSave({ requiredFields, allowedTeams, requireLossReason, automationIds })}>Salvar configuração</button></div>
       </div>
     </div>
   );

@@ -113,8 +113,8 @@ async function runActionNode(node: Extract<NodeData, { kind: "action" }>, ctx: R
     case "add_tag": {
       const tag = String(config.tag ?? "").trim();
       if (!tag) return { ok: false, reason: "sem tag" };
-      await syncTags(orgId, [tag]).catch(() => {}); // mantém o catálogo de etiquetas completo
       const target = config.target === "opportunity" ? "opportunity" : "contact";
+      await syncTags(orgId, [tag], target); // valida o escopo antes de alterar o registro
       if (target === "contact" && ctx.contactId) {
         const c = await prisma.contact.findFirst({ where: { id: ctx.contactId, organizationId: orgId } });
         if (c) {
@@ -375,6 +375,7 @@ export async function triggerAutomations(
           contactId: ctx.contactId ?? null,
           opportunityId: ctx.opportunityId ?? null,
           appointmentId: ctx.appointmentId ?? null,
+          appointmentStartAt: trigger === "APPOINTMENT_STARTING" && ctx.appointment ? new Date(ctx.appointment.startAt) : null,
           payload: ctx.payload !== undefined ? JSON.stringify(ctx.payload) : null,
           status: "RUNNING",
         },
@@ -546,7 +547,7 @@ export async function processDueTriggerAutomations() {
         ],
       },
       select: { id: true },
-      take: 500,
+      take: 2_000,
     });
 
     for (const contact of contacts) {

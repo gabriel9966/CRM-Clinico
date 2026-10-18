@@ -9,6 +9,7 @@ import { importOptOut, importRows, importTags, phoneKey } from "@/lib/crm-import
 import { actorOf, audit } from "@/lib/audit";
 import { syncTags } from "@/lib/crm-catalog";
 import { softDeleteContacts } from "@/lib/soft-delete";
+import { hasModulePermission } from "@/lib/access";
 
 export type ContactInput = {
   name: string;
@@ -33,7 +34,9 @@ function parseTags(raw: string): string[] {
 }
 
 export async function createContact(data: ContactInput) {
-  const { organizationId } = await requireOrgUser();
+  const user = await requireOrgUser(); const { organizationId } = user;
+  if (!hasModulePermission(user, "contacts.write")) throw new Error("Sem permissão para criar contatos.");
+  await syncTags(organizationId, data.tags, "contact");
   const contact = await prisma.contact.create({
     data: {
       organizationId,
@@ -49,7 +52,6 @@ export async function createContact(data: ContactInput) {
       customFields: (data.customFields ?? {}) as Prisma.InputJsonValue,
     },
   });
-  await syncTags(organizationId, data.tags);
   revalidatePath("/contacts");
   revalidatePath("/pipeline");
   await triggerAutomations(organizationId, "CONTACT_CREATED", { contactId: contact.id });
@@ -59,11 +61,13 @@ export async function createContact(data: ContactInput) {
 }
 
 export async function updateContact(id: string, data: ContactInput) {
-  const { organizationId } = await requireOrgUser();
+  const user = await requireOrgUser(); const { organizationId } = user;
+  if (!hasModulePermission(user, "contacts.write")) throw new Error("Sem permissão para alterar contatos.");
   const before = await prisma.contact.findFirst({ where: { id, organizationId } });
   if (!before) return;
   const beforeTags = parseTags(before.tags);
 
+  await syncTags(organizationId, data.tags, "contact");
   await prisma.contact.update({
     where: { id },
     data: {
@@ -79,7 +83,6 @@ export async function updateContact(id: string, data: ContactInput) {
       customFields: (data.customFields ?? {}) as Prisma.InputJsonValue,
     },
   });
-  await syncTags(organizationId, data.tags);
   revalidatePath("/contacts");
   revalidatePath("/pipeline");
   revalidatePath("/conversations");
@@ -95,7 +98,7 @@ export async function updateContact(id: string, data: ContactInput) {
 // o botão na UI, já que uma server action pode ser chamada direto.
 export async function reassignContactOwner(contactId: string, ownerId: string | null) {
   const user = await requireOrgUser();
-  if (user.role !== "ADMIN") return;
+  if (user.role !== "ADMIN" || !hasModulePermission(user, "contacts.write")) return;
   await prisma.contact.updateMany({ where: { id: contactId, organizationId: user.organizationId }, data: { ownerId } });
   revalidatePath("/conversations");
   revalidatePath("/contacts");
@@ -103,6 +106,7 @@ export async function reassignContactOwner(contactId: string, ownerId: string | 
 
 export async function deleteContact(id: string) {
   const user = await requireOrgUser();
+  if (!hasModulePermission(user, "contacts.write")) throw new Error("Sem permissão para excluir contatos.");
   const { organizationId } = user;
   const res = await softDeleteContacts(prisma, organizationId, [id]);
   if (res.count > 0) {
@@ -117,6 +121,7 @@ export async function deleteContact(id: string) {
 /** Ações em lote da tabela de leads; ids são sempre restringidos ao tenant atual. */
 export async function bulkUpdateContacts(ids: string[], input: { ownerId?: string | null; addTags?: string[]; removeTags?: string[]; delete?: boolean }) {
   const user = await requireOrgUser();
+  if (!hasModulePermission(user, "contacts.write")) throw new Error("Sem permissão para alterar contatos.");
   const contactIds = [...new Set(ids)].slice(0, 500);
   if (!contactIds.length) return;
   if (input.delete) {
@@ -131,7 +136,7 @@ export async function bulkUpdateContacts(ids: string[], input: { ownerId?: strin
         for (const tag of input.removeTags ?? []) tags.delete(tag);
         await prisma.contact.update({ where: { id: contact.id }, data: { tags: JSON.stringify([...tags]) } });
       }
-      await syncTags(user.organizationId, input.addTags ?? []);
+      await syncTags(user.organizationId, input.addTags ?? [], "contact");
     }
   }
   revalidatePath("/contacts"); revalidatePath("/pipeline"); revalidatePath("/conversations");
@@ -145,6 +150,7 @@ export async function bulkUpdateContacts(ids: string[], input: { ownerId?: strin
 // sobrevivente são descartados em vez de reapontados.
 export async function mergeContacts(keepId: string, mergeIds: string[]) {
   const user = await requireOrgUser();
+  if (!hasModulePermission(user, "contacts.write")) throw new Error("Sem permissão para mesclar contatos.");
   const { organizationId } = user;
   const loserIds = [...new Set(mergeIds)].filter((id) => id !== keepId);
   if (loserIds.length === 0) return;
@@ -224,6 +230,7 @@ export type ImportSummary = { created: number; skipped: number; errors: string[]
 // organização — nunca cria nem reatribui pra fora dela.
 export async function importContactsCsv(csvText: string): Promise<ImportSummary> {
   const user = await requireOrgUser();
+  if (!hasModulePermission(user, "contacts.write") || !hasModulePermission(user, "data.import_export")) throw new Error("Sem permissão para importar contatos.");
   const { organizationId } = user;
   const rows = importRows(csvText, ["name"]);
   const team = await prisma.user.findMany({ where: { organizationId }, select: { id: true, name: true } });
@@ -310,7 +317,7 @@ export async function importContactsCsv(csvText: string): Promise<ImportSummary>
     created++;
   }
 
-  await syncTags(organizationId, [...importedTags]);
+  await syncTags(organizationId, [...importedTags], "contact");
   if (created) await audit(organizationId, { action: "contact.imported", entity: "Contact", ...actorOf(user), meta: { created, skipped } });
   revalidatePath("/contacts");
   revalidatePath("/pipeline");
