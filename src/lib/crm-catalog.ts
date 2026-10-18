@@ -25,7 +25,7 @@ function isUniqueViolation(err: unknown) {
 
 // ── Etiquetas ───────────────────────────────────────────────────────────────
 
-export type TagDTO = { id: string; name: string; color: string; contacts: number; opportunities: number };
+export type TagDTO = { id: string; name: string; color: string; description: string; appliesToContacts: boolean; appliesToOpportunities: boolean; contacts: number; opportunities: number };
 
 /**
  * Garante que cada nome usado em contatos/negócios exista no catálogo. Chamado
@@ -56,10 +56,13 @@ async function backfillTags(organizationId: string) {
   await syncTags(organizationId, [...names]);
 }
 
-export async function listTags(organizationId: string): Promise<TagDTO[]> {
+export async function listTags(organizationId: string, target?: "contact" | "opportunity"): Promise<TagDTO[]> {
   if ((await prismaRaw.tag.count({ where: { organizationId } })) === 0) await backfillTags(organizationId);
 
-  const tags = await prismaRaw.tag.findMany({ where: { organizationId }, orderBy: { name: "asc" } });
+  const tags = await prismaRaw.tag.findMany({
+    where: { organizationId, ...(target === "contact" ? { appliesToContacts: true } : target === "opportunity" ? { appliesToOpportunities: true } : {}) },
+    orderBy: { name: "asc" },
+  });
   return Promise.all(
     tags.map(async (t) => {
       const token = JSON.stringify(t.name); // "VIP" com aspas: não casa com "VIP2"
@@ -67,16 +70,19 @@ export async function listTags(organizationId: string): Promise<TagDTO[]> {
         prisma.contact.count({ where: { organizationId, tags: { contains: token } } }),
         prisma.opportunity.count({ where: { organizationId, tags: { contains: token } } }),
       ]);
-      return { id: t.id, name: t.name, color: t.color, contacts, opportunities };
+      return { id: t.id, name: t.name, color: t.color, description: t.description ?? "", appliesToContacts: t.appliesToContacts, appliesToOpportunities: t.appliesToOpportunities, contacts, opportunities };
     })
   );
 }
 
-export async function createTag(organizationId: string, input: { name: string; color?: string }, actor: Actor = {}) {
+export async function createTag(organizationId: string, input: { name: string; color?: string; description?: string; appliesToContacts?: boolean; appliesToOpportunities?: boolean }, actor: Actor = {}) {
   const name = normalize(input.name);
   if (!name || name.length > 50) throw new AppError("nome_invalido", "o nome da etiqueta deve ter de 1 a 50 caracteres", 400);
   try {
-    const tag = await prismaRaw.tag.create({ data: { organizationId, name, color: input.color } });
+    const appliesToContacts = input.appliesToContacts !== false;
+    const appliesToOpportunities = input.appliesToOpportunities !== false;
+    if (!appliesToContacts && !appliesToOpportunities) throw new AppError("escopo_invalido", "escolha ao menos onde esta tag pode ser usada", 400);
+    const tag = await prismaRaw.tag.create({ data: { organizationId, name, color: input.color, description: input.description?.trim().slice(0, 180) ?? "", appliesToContacts, appliesToOpportunities } });
     await writeAudit(prismaRaw, organizationId, { action: "tag.created", entity: "Tag", entityId: tag.id, ...actor, meta: { name } });
     return tag;
   } catch (err) {
@@ -125,7 +131,7 @@ async function rewriteTagOnRecords(
 export async function updateTag(
   organizationId: string,
   id: string,
-  input: { name?: string; color?: string },
+  input: { name?: string; color?: string; description?: string; appliesToContacts?: boolean; appliesToOpportunities?: boolean },
   actor: Actor = {}
 ) {
   const tag = await prismaRaw.tag.findFirst({ where: { id, organizationId } });
@@ -134,9 +140,12 @@ export async function updateTag(
   const name = input.name === undefined ? tag.name : normalize(input.name);
   if (!name || name.length > 50) throw new AppError("nome_invalido", "o nome da etiqueta deve ter de 1 a 50 caracteres", 400);
 
+  const appliesToContacts = input.appliesToContacts ?? tag.appliesToContacts;
+  const appliesToOpportunities = input.appliesToOpportunities ?? tag.appliesToOpportunities;
+  if (!appliesToContacts && !appliesToOpportunities) throw new AppError("escopo_invalido", "escolha ao menos onde esta tag pode ser usada", 400);
   try {
     return await prismaRaw.$transaction(async (tx) => {
-      const updated = await tx.tag.update({ where: { id }, data: { name, color: input.color } });
+      const updated = await tx.tag.update({ where: { id }, data: { name, color: input.color, description: input.description?.trim().slice(0, 180), appliesToContacts, appliesToOpportunities } });
       if (name !== tag.name) {
         await rewriteTagOnRecords(tx, organizationId, tag.name, name);
         await writeAudit(tx, organizationId, {

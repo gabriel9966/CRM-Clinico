@@ -2,17 +2,21 @@ import { getPipelines, getTeamMembers, getCustomFieldDefinitions } from "@/lib/d
 import { listLossReasons, listTags } from "@/lib/crm-catalog";
 import { getPipelineBoard } from "@/lib/queries";
 import { requireOrgUser } from "@/lib/auth";
+import { allowedPipelineIds, hasModulePermission } from "@/lib/access";
 import { PipelineBoard } from "@/components/pipeline/PipelineBoard";
 
 export default async function PipelinePage() {
-  const { organizationId } = await requireOrgUser();
-  const [pipelines, team, customFieldDefs, lossReasons, tags] = await Promise.all([
+  const user = await requireOrgUser();
+  const { organizationId } = user;
+  const accessIds = await allowedPipelineIds(user);
+  const [allPipelines, team, customFieldDefs, lossReasons, tags] = await Promise.all([
     getPipelines(organizationId),
     getTeamMembers(organizationId),
     getCustomFieldDefinitions(organizationId),
     listLossReasons(organizationId),
-    listTags(organizationId),
+    listTags(organizationId, "opportunity"),
   ]);
+  const pipelines = !hasModulePermission(user, "pipeline.read") ? [] : accessIds === null ? allPipelines : allPipelines.filter((pipeline) => accessIds.includes(pipeline.id));
 
   // Só o primeiro pipeline vem montado: totais de cada etapa (do banco) + a
   // primeira página de cartões. Trocar de pipeline e "carregar mais" são sob demanda.

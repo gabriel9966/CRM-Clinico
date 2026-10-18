@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireOrgUser } from "@/lib/auth";
+import { canAccessConnection, hasModulePermission } from "@/lib/access";
 import { getSendOptions, sendContactMessage, type SendErrorCode } from "@/lib/messaging";
 import type { SendOptionDTO } from "@/lib/types";
 import { actorOf, audit } from "@/lib/audit";
@@ -13,7 +14,8 @@ export type SendOutcome =
   | { ok: true; status: "sent" | "failed"; error?: string }
   | { ok: false; code: SendErrorCode | "sem_permissao"; error: string };
 
-async function canTalkTo(user: { id: string; role: string; organizationId: string }, contactId: string) {
+async function canTalkTo(user: { id: string; role: string; organizationId: string; accessConfigured: boolean }, contactId: string) {
+  if (!hasModulePermission(user, "conversations.reply")) return false;
   const contact = await prisma.contact.findFirst({ where: { id: contactId, organizationId: user.organizationId }, select: { ownerId: true } });
   return Boolean(contact && (user.role === "ADMIN" || contact.ownerId === user.id));
 }
@@ -25,12 +27,14 @@ export async function fetchSendOptions(contactId: string): Promise<SendOptionDTO
   return getSendOptions(user.organizationId, contactId);
 }
 
-async function getConversationForUser(user: { id: string; role: string; organizationId: string }, conversationId: string) {
+async function getConversationForUser(user: { id: string; role: string; organizationId: string; accessConfigured: boolean }, conversationId: string) {
+  if (!hasModulePermission(user, "conversations.read")) return null;
   const conversation = await prisma.conversation.findFirst({
     where: { id: conversationId, organizationId: user.organizationId },
     select: { id: true, contactId: true, connectionId: true, ownerId: true, status: true },
   });
-  if (!conversation || (user.role !== "ADMIN" && conversation.ownerId !== user.id)) return null;
+  if (!conversation || (user.role !== "ADMIN" && conversation.ownerId !== user.id && !hasModulePermission(user, "conversations.manage"))) return null;
+  if (conversation.connectionId && !(await canAccessConnection(user, conversation.connectionId))) return null;
   return conversation;
 }
 
@@ -66,11 +70,13 @@ export async function addPrivateNote(conversationId: string, rawText: string) {
 
 export async function sendMessage(conversationId: string, text: string): Promise<SendOutcome> {
   const user = await requireOrgUser();
+  if (!hasModulePermission(user, "conversations.reply")) return { ok: false, code: "sem_permissao", error: "Você não tem permissão para responder atendimentos." };
   const conversation = await getConversationForUser(user, conversationId);
   if (!conversation) return { ok: false, code: "sem_permissao", error: "Você não pode enviar mensagem neste atendimento." };
   if (conversation.status === "CLOSED") return { ok: false, code: "sem_permissao", error: "Reabra o atendimento antes de enviar uma mensagem." };
   if (!conversation.connectionId) return { ok: false, code: "sem_canal", error: "Este histórico não tem canal identificado e não pode receber novos envios." };
 
+  if (!(await canAccessConnection(user, conversation.connectionId, "send"))) return { ok: false, code: "sem_permissao", error: "Você não tem permissão para enviar por esta instância." };
   const result = await sendContactMessage(user.organizationId, conversation.contactId, text, {
     connectionId: conversation.connectionId,
     senderId: user.id,
@@ -101,6 +107,7 @@ export async function retryFailedMessage(conversationId: string, messageId: stri
 
 export async function assignConversation(conversationId: string, ownerId: string | null, mode: "assign" | "transfer" | "claim" = "assign") {
   const user = await requireOrgUser();
+  if (!hasModulePermission(user, "conversations.manage") && mode !== "claim") return { ok: false, error: "Você não tem permissão para gerir atendimentos." };
   const conversation = await prisma.conversation.findFirst({ where: { id: conversationId, organizationId: user.organizationId }, select: { ownerId: true } });
   if (!conversation) return { ok: false, error: "Atendimento não encontrado." };
   if (mode === "claim") ownerId = user.id;

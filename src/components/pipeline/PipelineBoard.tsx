@@ -102,11 +102,6 @@ export function PipelineBoard({
   const pipeline = pipelines.find((p) => p.id === currentPipelineId) ?? pipelines[0];
   const groups = useMemo(() => [...new Set(pipelines.map((p) => p.group))], [pipelines]);
   const currentGroup = pipeline?.group ?? groups[0] ?? "Geral";
-  const groupPipelines = pipelines.filter((p) => p.group === currentGroup);
-  function selectGroup(group: string) {
-    const target = pipelines.find((p) => p.group === group);
-    if (target) setCurrentPipelineId(target.id);
-  }
   const stages = useMemo(() => (pipeline ? [...pipeline.stages].sort((a, b) => a.order - b.order) : []), [pipeline]);
   const stageKey = stages.map((s) => s.id).join(",");
 
@@ -281,13 +276,23 @@ export function PipelineBoard({
         </div>
       </div>
 
-      <div className="content">
-        <nav className="pipeline-horizontal" aria-label="Seleção de pipelines">
-          <div className="pipeline-horizontal-groups">
-            {groups.map((group) => <button key={group} type="button" className={`pipeline-tab ${group === currentGroup ? "active" : ""}`} onClick={() => selectGroup(group)}>{group} <span>({pipelines.filter((p) => p.group === group).length})</span></button>)}
-          </div>
-          <div className="pipeline-horizontal-items">
-            {groupPipelines.map((item) => <button key={item.id} type="button" className={`pipeline-tab ${item.id === currentPipelineId ? "active" : ""}`} onClick={() => setCurrentPipelineId(item.id)}>{item.name}</button>)}
+      <div className="content pipeline-content">
+        <nav className="pipeline-side" aria-label="Seleção de pipelines">
+          {groups.map((group) => (
+            <div key={group} className="pipeline-side-group">
+              <div className="pipeline-side-title">{group}</div>
+              {pipelines.filter((p) => p.group === group).map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`pipeline-side-item ${item.id === currentPipelineId ? "active" : ""}`}
+                  onClick={() => setCurrentPipelineId(item.id)}
+                >
+                  {item.name}
+                </button>
+              ))}
+            </div>
+          ))}
           <button className="btn small ghost" onClick={() => setModal({ type: "pipeline-new" })}>
             <Icon.plus /> Novo pipeline
           </button>
@@ -297,8 +302,8 @@ export function PipelineBoard({
           >
             <Icon.settings /> Gerenciar etapas
           </button>
-          </div>
         </nav>
+        <div className="pipeline-main">
 
         <div className="pipeline-bar" style={{ gap: 8 }}>
           <div className="search-bar" style={{ margin: 0, flex: 1, maxWidth: 360 }}>
@@ -435,6 +440,7 @@ export function PipelineBoard({
             })}
           </div>
         )}
+        </div>
       </div>
 
       {modal?.type === "opportunity" && (

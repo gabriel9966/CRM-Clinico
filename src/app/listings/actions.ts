@@ -3,6 +3,7 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireOrgUser } from "@/lib/auth";
+import { allowedConnectionIds, canAccessConnection, canAccessPipeline, hasModulePermission } from "@/lib/access";
 import { findDuplicateContacts } from "@/lib/data";
 import { segmentWhere } from "@/lib/segments";
 import {
@@ -72,7 +73,9 @@ export async function fetchStageSummaries(pipelineId: string) {
 }
 
 export async function fetchPipelineBoard(pipelineId: string, filters: { ownerId?: string; q?: string; tag?: string; overdue?: boolean; sort?: "newest" | "value" | "close" } = {}) {
-  const { organizationId } = await requireOrgUser();
+  const user = await requireOrgUser();
+  const { organizationId } = user;
+  if (!hasModulePermission(user, "pipeline.read") || !(await canAccessPipeline(user, pipelineId))) return {};
   return getPipelineBoard(organizationId, pipelineId, { ownerId: filters.ownerId, q: sanitize(filters.q), tag: sanitize(filters.tag, 50), overdue: filters.overdue, sort: filters.sort });
 }
 
@@ -83,6 +86,8 @@ export async function fetchConversations(query: {
   tag?: string; stageId?: string; status?: "OPEN" | "CLOSED" | "ALL"; from?: string; to?: string;
 } = {}) {
   const user = await requireOrgUser();
+  if (!hasModulePermission(user, "conversations.read")) return { page: { items: [], nextCursor: null, total: 0 }, channels: {} };
+  const connectionAccessIds = await allowedConnectionIds(user);
   const page = await getConversationsPage(user.organizationId, {
     q: sanitize(query.q),
     cursor: query.cursor,
@@ -95,7 +100,8 @@ export async function fetchConversations(query: {
     status: query.status,
     from: query.from,
     to: query.to,
-    restrictToOwnerId: user.role === "ADMIN" ? undefined : user.id,
+    allowedConnectionIds: connectionAccessIds ?? undefined,
+    restrictToOwnerId: hasModulePermission(user, "conversations.manage") ? undefined : user.id,
   });
   const channels: Record<string, ConversationChannelInfo> = await getChannelsFor(
     user.organizationId,
@@ -111,6 +117,9 @@ export async function fetchThread(contactId: string, cursor?: string) {
 
 export async function fetchConversationThread(conversationId: string, cursor?: string) {
   const user = await requireOrgUser();
+  if (!hasModulePermission(user, "conversations.read")) return null;
+  const conversation = await prisma.conversation.findFirst({ where: { id: conversationId, organizationId: user.organizationId }, select: { connectionId: true } });
+  if (!conversation || (conversation.connectionId && !(await canAccessConnection(user, conversation.connectionId)))) return null;
   return getConversationMessagesPage(user.organizationId, { id: user.id, role: user.role }, conversationId, { cursor });
 }
 

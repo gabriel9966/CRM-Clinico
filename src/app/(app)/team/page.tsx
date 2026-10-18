@@ -1,13 +1,14 @@
-import { getTeamMembers, getPipelines } from "@/lib/data";
+import { getConnections, getTeamMembers, getPipelines } from "@/lib/data";
 import { getOwnerStats } from "@/lib/queries";
 import { requireOrgUser } from "@/lib/auth";
 import { TeamView } from "@/components/team/TeamView";
 
 export default async function TeamPage() {
   const user = await requireOrgUser();
-  const [team, pipelines, stats] = await Promise.all([
+  const [team, pipelines, connections, stats] = await Promise.all([
     getTeamMembers(user.organizationId),
     getPipelines(user.organizationId),
+    getConnections(user.organizationId),
     getOwnerStats(user.organizationId),
   ]);
 
@@ -15,6 +16,7 @@ export default async function TeamPage() {
     <TeamView
       team={team}
       pipelines={pipelines}
+      connections={connections}
       contactsByOwner={stats.contactsByOwner}
       dealsByOwnerStage={stats.dealsByOwnerStage}
       currentUserId={user.id}

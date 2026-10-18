@@ -259,6 +259,7 @@ export type ConversationQuery = {
   status?: "OPEN" | "CLOSED" | "ALL";
   from?: string;
   to?: string;
+  allowedConnectionIds?: string[];
 };
 
 /**
@@ -281,6 +282,7 @@ export async function getConversationsPage(organizationId: string, query: Conver
   else if (query.ownerId) clauses.push({ ownerId: query.ownerId });
   if (query.team) clauses.push({ owner: { team: query.team } });
   if (query.connectionId) clauses.push({ connectionId: query.connectionId });
+  if (query.allowedConnectionIds) clauses.push({ connectionId: { in: query.allowedConnectionIds } });
   if (query.provider) clauses.push({ connection: { provider: query.provider } });
   if (query.status && query.status !== "ALL") clauses.push({ status: query.status });
   if (query.tag) clauses.push({ contact: { tags: { contains: JSON.stringify(query.tag) } } });

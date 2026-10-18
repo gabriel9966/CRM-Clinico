@@ -260,7 +260,11 @@ export async function getGoogleConnectedUserIds(organizationId: string): Promise
 }
 
 export async function getTeamMembers(organizationId: string): Promise<TeamMemberDTO[]> {
-  const users = await prisma.user.findMany({ where: { organizationId }, orderBy: { createdAt: "asc" } });
+  const users = await prisma.user.findMany({
+    where: { organizationId },
+    include: { pipelineAccesses: true, connectionAccesses: true },
+    orderBy: { createdAt: "asc" },
+  });
   return users.map((u) => ({
     id: u.id,
     name: u.name,
@@ -269,6 +273,9 @@ export async function getTeamMembers(organizationId: string): Promise<TeamMember
     team: u.team,
     role: u.role,
     permissions: (() => { try { const value = JSON.parse(u.permissions); return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []; } catch { return []; } })(),
+    accessConfigured: u.accessConfigured,
+    pipelineAccesses: u.pipelineAccesses.map((access) => ({ pipelineId: access.pipelineId, canView: access.canView, canEdit: access.canEdit })),
+    connectionAccesses: u.connectionAccesses.map((access) => ({ connectionId: access.connectionId, canView: access.canView, canSend: access.canSend })),
     isActive: u.isActive,
   }));
 }

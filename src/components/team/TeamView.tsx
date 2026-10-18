@@ -4,20 +4,23 @@ import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
 import { initials, fmtMoney, STAGE_COLORS } from "@/lib/format";
-import type { TeamMemberDTO, PipelineDTO } from "@/lib/types";
-import { createTeamMember, updateTeamMember, deleteTeamMember, toggleTeamMemberActive, type TeamMemberState } from "@/app/team/actions";
+import type { TeamMemberDTO, PipelineDTO, ConnectionDTO } from "@/lib/types";
+import { createTeamMember, updateTeamMember, updateTeamMemberAccess, deleteTeamMember, toggleTeamMemberActive, type TeamMemberState, type TeamAccessInput } from "@/app/team/actions";
+import { MODULE_PERMISSIONS } from "@/lib/access-policy";
 
 const initialState: TeamMemberState = {};
 
 export function TeamView({
   team,
   pipelines,
+  connections,
   contactsByOwner,
   dealsByOwnerStage,
   currentUserId,
 }: {
   team: TeamMemberDTO[];
   pipelines: PipelineDTO[];
+  connections: ConnectionDTO[];
   /** Quantos contatos cada atendente tem (somado no banco). */
   contactsByOwner: Record<string, number>;
   /** Negócios por atendente e etapa (somados no banco). */
@@ -117,6 +120,8 @@ export function TeamView({
         editing ? (
           <EditMemberModal
             member={editing}
+            pipelines={pipelines}
+            connections={connections}
             isSelf={editing.id === currentUserId}
             busy={busy}
             onClose={() => setModalOpen(false)}
@@ -135,6 +140,16 @@ export function TeamView({
               try {
                 await toggleTeamMemberActive(editing.id, isActive);
                 router.refresh();
+              } finally {
+                setBusy(false);
+              }
+            }}
+            onSaveAccess={async (access) => {
+              setBusy(true);
+              try {
+                const result = await updateTeamMemberAccess(editing.id, access);
+                if (result?.error) alert(result.error);
+                else router.refresh();
               } finally {
                 setBusy(false);
               }
@@ -212,24 +227,44 @@ export function TeamView({
 
 function EditMemberModal({
   member,
+  pipelines,
+  connections,
   isSelf,
   busy,
   onClose,
   onSave,
   onDelete,
   onToggleActive,
+  onSaveAccess,
 }: {
   member: TeamMemberDTO;
+  pipelines: PipelineDTO[];
+  connections: ConnectionDTO[];
   isSelf: boolean;
   busy: boolean;
   onClose: () => void;
   onSave: (name: string, color: string, team: string) => void;
   onDelete: () => void;
   onToggleActive: (isActive: boolean) => void;
+  onSaveAccess: (input: TeamAccessInput) => void;
 }) {
   const [name, setName] = useState(member.name);
   const [color, setColor] = useState(member.color);
   const [team, setTeam] = useState(member.team);
+  const [role, setRole] = useState<TeamAccessInput["role"]>(member.role);
+  const [permissions, setPermissions] = useState<string[]>(member.permissions);
+  const [pipelineAccesses, setPipelineAccesses] = useState<TeamAccessInput["pipelineAccesses"]>(member.pipelineAccesses.map((item) => ({ pipelineId: item.pipelineId, canEdit: item.canEdit })));
+  const [connectionAccesses, setConnectionAccesses] = useState<TeamAccessInput["connectionAccesses"]>(member.connectionAccesses.map((item) => ({ connectionId: item.connectionId, canSend: item.canSend })));
+
+  function togglePermission(permission: string) {
+    setPermissions((current) => current.includes(permission) ? current.filter((item) => item !== permission) : [...current, permission]);
+  }
+  function togglePipeline(pipelineId: string) {
+    setPipelineAccesses((current) => current.some((item) => item.pipelineId === pipelineId) ? current.filter((item) => item.pipelineId !== pipelineId) : [...current, { pipelineId, canEdit: true }]);
+  }
+  function toggleConnection(connectionId: string) {
+    setConnectionAccesses((current) => current.some((item) => item.connectionId === connectionId) ? current.filter((item) => item.connectionId !== connectionId) : [...current, { connectionId, canSend: true }]);
+  }
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -257,6 +292,42 @@ function EditMemberModal({
               <label>Equipe</label>
               <input value={team} onChange={(e) => setTeam(e.target.value)} placeholder="Ex: Comercial" />
             </div>
+            {!isSelf && <>
+              <div className="field">
+                <label>Perfil de acesso</label>
+                <select value={role} onChange={(event) => setRole(event.target.value as TeamAccessInput["role"])}>
+                  <option value="MEMBER">Membro — acesso configurável</option>
+                  <option value="ADMIN">Administrador — acesso total</option>
+                </select>
+                <p className="field-help">Administradores podem gerir a conta. Membros usam apenas os módulos e escopos selecionados abaixo.</p>
+              </div>
+              {role === "MEMBER" && <>
+                <div className="field">
+                  <label>Módulos permitidos</label>
+                  <div className="access-grid">
+                    {MODULE_PERMISSIONS.map((permission) => <label key={permission} className="access-check"><input type="checkbox" checked={permissions.includes(permission)} onChange={() => togglePermission(permission)} /> {permission}</label>)}
+                  </div>
+                </div>
+                <div className="field">
+                  <label>Pipelines que pode visualizar e operar</label>
+                  <div className="access-grid">
+                    {pipelines.map((pipeline) => {
+                      const access = pipelineAccesses.find((item) => item.pipelineId === pipeline.id);
+                      return <label key={pipeline.id} className="access-check"><input type="checkbox" checked={Boolean(access)} onChange={() => togglePipeline(pipeline.id)} /> {pipeline.name}{access && <span><input type="checkbox" checked={access.canEdit} onChange={() => setPipelineAccesses((items) => items.map((item) => item.pipelineId === pipeline.id ? { ...item, canEdit: !item.canEdit } : item))} /> editar</span>}</label>;
+                    })}
+                  </div>
+                </div>
+                <div className="field">
+                  <label>Instâncias e canais permitidos</label>
+                  <div className="access-grid">
+                    {connections.map((connection) => {
+                      const access = connectionAccesses.find((item) => item.connectionId === connection.id);
+                      return <label key={connection.id} className="access-check"><input type="checkbox" checked={Boolean(access)} onChange={() => toggleConnection(connection.id)} /> {connection.label} ({connection.provider}){access && <span><input type="checkbox" checked={access.canSend} onChange={() => setConnectionAccesses((items) => items.map((item) => item.connectionId === connection.id ? { ...item, canSend: !item.canSend } : item))} /> enviar</span>}</label>;
+                    })}
+                  </div>
+                </div>
+              </>}
+            </>}
             <div className="field">
               <label>Cor do avatar</label>
               <div className="swatch-row">
@@ -299,7 +370,8 @@ function EditMemberModal({
             )}
             <div style={{ flex: 1 }} />
             <button type="button" className="btn" onClick={onClose}>Cancelar</button>
-            <button type="submit" className="btn primary" disabled={busy}>Salvar</button>
+            <button type="submit" className="btn primary" disabled={busy}>Salvar dados</button>
+            {!isSelf && <button type="button" className="btn primary" disabled={busy} onClick={() => onSaveAccess({ role, permissions, pipelineAccesses, connectionAccesses })}>Salvar acessos</button>}
           </div>
         </form>
       </div>

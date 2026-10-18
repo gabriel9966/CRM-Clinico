@@ -2,22 +2,25 @@ import { getConnections, getPipelines, getTeamMembers, getMessageTemplates } fro
 import { listTags } from "@/lib/crm-catalog";
 import { getConversationMessagesPage, getConversationsPage } from "@/lib/queries";
 import { requireOrgUser } from "@/lib/auth";
+import { allowedConnectionIds, hasModulePermission } from "@/lib/access";
 import { getSendOptions } from "@/lib/messaging";
 import { ConversationsView } from "@/components/conversations/ConversationsView";
 
 export default async function ConversationsPage() {
   const user = await requireOrgUser();
+  const connectionAccessIds = await allowedConnectionIds(user);
+  const canReadConversations = hasModulePermission(user, "conversations.read");
 
   // Permissão: ADMIN vê todas as conversas da empresa; MEMBER só vê as dos
   // contatos atribuídos a ele(a) — evita que um atendente leia a conversa
   // de um lead de outro atendente. A regra é aplicada na consulta.
   const [page, team, templates, pipelines, connections, tags] = await Promise.all([
-    getConversationsPage(user.organizationId, { restrictToOwnerId: user.role === "ADMIN" ? undefined : user.id }),
+    canReadConversations ? getConversationsPage(user.organizationId, { restrictToOwnerId: hasModulePermission(user, "conversations.manage") ? undefined : user.id, allowedConnectionIds: connectionAccessIds ?? undefined }) : Promise.resolve({ items: [], nextCursor: null, total: 0 }),
     getTeamMembers(user.organizationId),
     getMessageTemplates(user.organizationId),
     getPipelines(user.organizationId),
-    getConnections(user.organizationId),
-    listTags(user.organizationId),
+    getConnections(user.organizationId).then((items) => connectionAccessIds === null ? items : items.filter((item) => connectionAccessIds.includes(item.id))),
+    listTags(user.organizationId, "contact"),
   ]);
 
   // Só a primeira página da lista e as mensagens da primeira conversa vêm do

@@ -29,6 +29,7 @@ model Organization {
 
   users         User[]
   pipelines     Pipeline[]
+  taskLists     TaskList[]
   contacts      Contact[]
   opportunities Opportunity[]
   messages      Message[]
@@ -75,6 +76,9 @@ model User {
   team         String   @default("Geral")
   role         Role     @default(MEMBER)
   permissions  String   @default("[]")
+  // Quando configurado, os acessos abaixo deixam de herdar a visualização
+  // ampla legada e passam a ser uma lista explícita por pipeline/conexão.
+  accessConfigured Boolean @default(false)
   isSuperAdmin Boolean  @default(false)
   // Membros inativos (ex: de férias) ficam fora do rodízio de atribuição
   // automática em lib/assignment.ts, mas continuam podendo logar normalmente.
@@ -94,6 +98,8 @@ model User {
   activities         Activity[]    @relation("ActivityAssignee")
   appointments       Appointment[] @relation("AppointmentOwner")
   googleAccount      GoogleAccount?
+  pipelineAccesses   UserPipelineAccess[]
+  connectionAccesses UserConnectionAccess[]
 
   @@index([organizationId])
 }
@@ -320,8 +326,24 @@ model Pipeline {
 
   stages        Stage[]
   opportunities Opportunity[]
+  userAccesses  UserPipelineAccess[]
 
   @@index([organizationId])
+}
+
+model UserPipelineAccess {
+  id         String   @id @default(cuid())
+  canView    Boolean  @default(true)
+  canEdit    Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pipelineId String
+  pipeline   Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, pipelineId])
+  @@index([pipelineId])
 }
 
 model Stage {
@@ -452,6 +474,9 @@ model Tag {
   id        String   @id @default(cuid())
   name      String
   color     String   @default("#64748b")
+  description String? @default("")
+  appliesToContacts Boolean @default(true)
+  appliesToOpportunities Boolean @default(true)
   createdAt DateTime @default(now())
 
   organizationId String
@@ -645,8 +670,24 @@ model Connection {
   conversations   Conversation[]
   webhookLogs     WebhookLog[]
   campaigns       Campaign[]
+  userAccesses    UserConnectionAccess[]
 
   @@index([organizationId])
+}
+
+model UserConnectionAccess {
+  id           String   @id @default(cuid())
+  canView      Boolean  @default(true)
+  canSend      Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connectionId String
+  connection   Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, connectionId])
+  @@index([connectionId])
 }
 
 // Registro operacional de cada chamada recebida. O payload fica truncado para
@@ -731,10 +772,33 @@ model Activity {
   assigneeId String?
   assignee   User?   @relation("ActivityAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
 
+  // Quadro de tarefas (estilo Trello). listId nulo = cartão ainda sem coluna
+  // (criado por automação/API): aparece na primeira coluna do mesmo tipo.
+  listId   String?
+  list     TaskList? @relation(fields: [listId], references: [id], onDelete: SetNull)
+  position Int       @default(0)
+
   @@index([organizationId])
   @@index([contactId])
   @@index([opportunityId])
   @@index([dueAt])
+  @@index([listId])
+}
+
+// Coluna do quadro de tarefas. isDone: cartões nela contam como concluídos.
+model TaskList {
+  id        String   @id @default(cuid())
+  name      String
+  order     Int      @default(0)
+  isDone    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  activities Activity[]
+
+  @@index([organizationId])
 }
 
 enum AutomationTrigger {

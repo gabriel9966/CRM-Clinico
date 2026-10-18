@@ -5,7 +5,7 @@ import { requireAdminUser } from "@/lib/auth";
 import { actorOf } from "@/lib/audit";
 import { createTag, deleteTag, updateTag } from "@/lib/crm-catalog";
 
-export type TagInput = { name: string; color: string };
+export type TagInput = { name: string; color: string; description: string; appliesToContacts: boolean; appliesToOpportunities: boolean };
 
 function refreshTagViews() {
   revalidatePath("/tags");

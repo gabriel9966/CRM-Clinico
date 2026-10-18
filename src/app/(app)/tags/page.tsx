@@ -6,5 +6,5 @@ export default async function TagsPage() {
   // Página: atendente comum volta ao dashboard (requireAdminUser é para server actions e lança erro).
   const { organizationId } = await requireAdminPage();
   const tags = await listTags(organizationId);
-  return <TagsView tags={tags.map((tag) => ({ id: tag.id, name: tag.name, color: tag.color, contacts: tag.contacts, opportunities: tag.opportunities }))} />;
+  return <TagsView tags={tags.map((tag) => ({ id: tag.id, name: tag.name, color: tag.color, description: tag.description, appliesToContacts: tag.appliesToContacts, appliesToOpportunities: tag.appliesToOpportunities, contacts: tag.contacts, opportunities: tag.opportunities }))} />;
 }

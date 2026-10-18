@@ -196,6 +196,9 @@ export type TeamMemberDTO = {
   team: string;
   role: "ADMIN" | "MEMBER";
   permissions: string[];
+  accessConfigured: boolean;
+  pipelineAccesses: { pipelineId: string; canView: boolean; canEdit: boolean }[];
+  connectionAccesses: { connectionId: string; canView: boolean; canSend: boolean }[];
   isActive: boolean;
 };
 

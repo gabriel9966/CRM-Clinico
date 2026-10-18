@@ -1,0 +1,3 @@
+ALTER TABLE "Tag" ADD COLUMN "description" TEXT DEFAULT '';
+ALTER TABLE "Tag" ADD COLUMN "appliesToContacts" BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE "Tag" ADD COLUMN "appliesToOpportunities" BOOLEAN NOT NULL DEFAULT true;

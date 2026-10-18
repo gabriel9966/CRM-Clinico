@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { requireAdminUser } from "@/lib/auth";
+import { MODULE_PERMISSIONS } from "@/lib/access";
+import { actorOf, audit } from "@/lib/audit";
 
 export type TeamMemberState = { error?: string };
 
@@ -43,6 +45,46 @@ export async function updateTeamMember(
   const { organizationId } = await requireAdminUser();
   await prisma.user.updateMany({ where: { id, organizationId }, data: { name: data.name, color: data.color, team: data.team.trim().slice(0, 60) || "Geral" } });
   revalidatePath("/team");
+}
+
+export type TeamAccessInput = {
+  role: "ADMIN" | "MEMBER";
+  permissions: string[];
+  pipelineAccesses: { pipelineId: string; canEdit: boolean }[];
+  connectionAccesses: { connectionId: string; canSend: boolean }[];
+};
+
+/** Salva a matriz de acesso de um membro. IDs vindos da tela são validados na
+ * organização antes da gravação; a lista vazia é deliberadamente restritiva. */
+export async function updateTeamMemberAccess(id: string, input: TeamAccessInput) {
+  const current = await requireAdminUser();
+  if (current.id === id) return { error: "Para evitar perda de acesso, outro administrador deve alterar suas permissões." };
+  const target = await prisma.user.findFirst({ where: { id, organizationId: current.organizationId }, select: { id: true } });
+  if (!target) return { error: "Membro não encontrado." };
+
+  const permissions = [...new Set(input.permissions)].filter((permission) => (MODULE_PERMISSIONS as readonly string[]).includes(permission));
+  const pipelineIds = [...new Set(input.pipelineAccesses.map((access) => access.pipelineId).filter(Boolean))];
+  const connectionIds = [...new Set(input.connectionAccesses.map((access) => access.connectionId).filter(Boolean))];
+  const [pipelineCount, connectionCount] = await Promise.all([
+    prisma.pipeline.count({ where: { organizationId: current.organizationId, id: { in: pipelineIds } } }),
+    prisma.connection.count({ where: { organizationId: current.organizationId, id: { in: connectionIds } } }),
+  ]);
+  if (pipelineCount !== pipelineIds.length || connectionCount !== connectionIds.length) return { error: "Há um pipeline ou instância inválida na seleção." };
+
+  await prisma.$transaction(async (tx) => {
+    await tx.user.update({ where: { id }, data: { role: input.role, permissions: JSON.stringify(permissions), accessConfigured: input.role !== "ADMIN" } });
+    await tx.userPipelineAccess.deleteMany({ where: { userId: id } });
+    await tx.userConnectionAccess.deleteMany({ where: { userId: id } });
+    if (input.role === "MEMBER") {
+      if (pipelineIds.length) await tx.userPipelineAccess.createMany({ data: pipelineIds.map((pipelineId) => ({ userId: id, pipelineId, canView: true, canEdit: input.pipelineAccesses.find((access) => access.pipelineId === pipelineId)?.canEdit ?? false })) });
+      if (connectionIds.length) await tx.userConnectionAccess.createMany({ data: connectionIds.map((connectionId) => ({ userId: id, connectionId, canView: true, canSend: input.connectionAccesses.find((access) => access.connectionId === connectionId)?.canSend ?? false })) });
+    }
+  });
+  await audit(current.organizationId, { action: "team.access_updated", entity: "User", entityId: id, ...actorOf(current), meta: { role: input.role, permissions, pipelines: pipelineIds, connections: connectionIds } });
+  revalidatePath("/team");
+  revalidatePath("/pipeline");
+  revalidatePath("/conversations");
+  return { ok: true };
 }
 
 // Membro inativo (ex: de férias) sai do rodízio de atribuição automática
