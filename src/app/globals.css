@@ -184,6 +184,15 @@ input[type=checkbox], input[type=radio]{accent-color:var(--primary);}
 .sidebar-footer{margin-top:auto; padding:14px 14px 8px; font-size:11px; color:#88a7ba; line-height:1.5;}
 /* Em telas de até 1000px de altura o rodapé informativo cede espaço ao menu. */
 @media (max-height:1000px){ .sidebar-footer{display:none;} }
+.mobile-menu-btn{display:none;}
+/* Celular: sem faixa fixa de 62px; o menu é uma gaveta aberta pelo botão ☰. */
+@media (max-width:640px){
+  .sidebar:not(.mobile-open){display:none;}
+  .mobile-menu-btn{display:grid; place-items:center; position:fixed; top:14px; left:12px; z-index:40; width:38px; height:38px; border-radius:var(--radius-ctl); border:1px solid var(--border); background:var(--panel); color:var(--text); box-shadow:var(--shadow-sm); cursor:pointer;}
+  .mobile-menu-btn svg{width:20px; height:20px;}
+  /* id na frente: vence o padding do .topbar definido no bloco de 640px abaixo */
+  #app-shell .topbar,#app-shell .automations-toolbar{padding-left:60px;}
+}
 .sidebar-user{display:flex; align-items:center; gap:9px; padding:12px; margin-top:4px; border-top:1px solid rgba(255,255,255,.12);}
 .sidebar-user button{background:none;border:none;color:#9fb8c9;cursor:pointer;font-size:11px;font-weight:700; transition:color .15s;}
 .sidebar-user button:hover{color:#fff;}

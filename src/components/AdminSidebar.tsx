@@ -20,6 +20,9 @@ export function AdminSidebar({
   return (
     <>
     {sidebar.isMobile && sidebar.mobileOpen && <button type="button" className="sidebar-backdrop" aria-label="Fechar menu" onClick={sidebar.closeMobile} />}
+    <button type="button" className="mobile-menu-btn" onClick={sidebar.toggle} aria-label="Abrir menu" aria-controls="crm-navigation" aria-expanded={sidebar.mobileOpen}>
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+    </button>
     <aside className={`sidebar ${sidebar.isCompact ? "is-compact" : ""} ${sidebar.mobileOpen ? "mobile-open" : ""}`}>
       <div className="brand">
         <span className="brand-mark" aria-hidden="true">
