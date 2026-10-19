@@ -64,11 +64,17 @@ try {
   await page.locator('.thread-input button[type="submit"]').click();
   await page.getByText("Anotação privada de validação", { exact: true }).waitFor();
   assert.equal(await db.conversationPrivateNote.count({ where: { conversationId: conversation.id } }), 1);
+  const newConversationBox = await page.getByRole("button", { name: "Novo atendimento", exact: true }).boundingBox();
+  assert(newConversationBox && newConversationBox.y >= 0, "New conversation action is clipped");
   await page.screenshot({ path: `${process.env.SMOKE_ARTIFACTS_DIR || "/tmp"}/novacrm-conversations-desktop.png`, fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`${base}/contacts`);
   await page.locator("h1").first().waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 2), false, "contacts overflows the mobile viewport");
+  for (const button of await page.locator(".topbar button, .topbar a.btn").all()) {
+    const box = await button.boundingBox();
+    assert(box && box.x >= 0 && box.x + box.width <= 392, "Mobile header action is outside the viewport");
+  }
   await page.screenshot({ path: `${process.env.SMOKE_ARTIFACTS_DIR || "/tmp"}/novacrm-contacts-mobile.png`, fullPage: true });
   await context.clearCookies();
   await login(member.email);
