@@ -121,15 +121,15 @@ export async function getSendOptions(organizationId: string, contactId: string):
 async function deliver(connectionId: string, provider: Opt["provider"], destination: string, text: string) {
   const conn = await prisma.connection.findUniqueOrThrow({ where: { id: connectionId } });
   if (provider === "WHATSAPP_EVOLUTION") {
-    await evolution.sendText(decryptJson<evolution.EvolutionConfig>(conn.config), destination, text);
+    return evolution.sendText(decryptJson<evolution.EvolutionConfig>(conn.config), destination, text);
   } else if (provider === "WHATSAPP_AZAP") {
-    await azap.sendText(decryptJson<azap.AzapConfig>(conn.config), destination, text);
+    return azap.sendText(decryptJson<azap.AzapConfig>(conn.config), destination, text);
   } else if (provider === "WHATSAPP_CLOUD") {
-    await whatsappCloud.sendText(decryptJson<whatsappCloud.WhatsAppCloudConfig>(conn.config), destination, text);
+    return whatsappCloud.sendText(decryptJson<whatsappCloud.WhatsAppCloudConfig>(conn.config), destination, text);
   } else if (provider === "INSTAGRAM") {
-    await instagram.sendText(decryptJson<instagram.InstagramConfig>(conn.config), destination, text);
+    return instagram.sendText(decryptJson<instagram.InstagramConfig>(conn.config), destination, text);
   } else {
-    await email.sendText(decryptJson<email.EmailConfig>(conn.config), destination, text);
+    return email.sendText(decryptJson<email.EmailConfig>(conn.config), destination, text);
   }
 }
 
@@ -142,10 +142,10 @@ export async function sendContactMessage(
   organizationId: string,
   contactId: string,
   rawText: string,
-  opts: { connectionId?: string; senderId?: string; conversationId?: string } = {}
+  opts: { connectionId?: string; senderId?: string; conversationId?: string; templateId?: string; templateParameters?: string[] } = {}
 ): Promise<SendResult> {
-  const text = rawText.trim();
-  if (!text) return fail("texto_vazio");
+  let text = rawText.trim();
+  if (!text && !opts.templateId) return fail("texto_vazio");
 
   const loaded = await loadOptions(organizationId, contactId);
   if (!loaded) return fail("contato_nao_encontrado");
@@ -171,7 +171,16 @@ export async function sendContactMessage(
   }
 
   // Aplicado no serviço central para cobrir chat, automações, MCP e reenvios.
-  if (chosen.provider === "WHATSAPP_CLOUD") {
+  const template = opts.templateId ? await prisma.messageTemplate.findFirst({ where: { id: opts.templateId, organizationId, cloudApproved: true } }) : null;
+  if (opts.templateId && (!template?.cloudTemplateName || chosen.provider !== "WHATSAPP_CLOUD")) return fail("canal_invalido", "Template oficial inválido para esta instância.");
+  const parameters = opts.templateParameters ?? [];
+  if (!Array.isArray(parameters) || parameters.length > 30 || parameters.some((value) => typeof value !== "string" || !value.trim() || value.length > 4000)) return fail("canal_invalido", "Preencha os parâmetros do template.");
+  if (template) {
+    const indexes = [...template.body.matchAll(/\{\{(\d+)\}\}/g)].map((match) => Number(match[1]));
+    if (parameters.length !== Math.max(0, ...indexes)) return fail("canal_invalido", "Quantidade de parâmetros diferente do template.");
+    text = template.body.replace(/\{\{(\d+)\}\}/g, (_, index: string) => parameters[Number(index) - 1] ?? "");
+  }
+  if (chosen.provider === "WHATSAPP_CLOUD" && !template) {
     const lastInbound = await prisma.message.findFirst({
       where: { organizationId, contactId, connectionId: chosen.connectionId, direction: "in" },
       orderBy: { time: "desc" },
@@ -194,8 +203,14 @@ export async function sendContactMessage(
 
   let status: "sent" | "failed" = "sent";
   let error: string | undefined;
+  let externalMessageId: string | null = null;
   try {
-    await deliver(chosen.connectionId, chosen.provider, chosen.externalId, text);
+    const response = template ? await whatsappCloud.sendTemplate(
+      decryptJson<whatsappCloud.WhatsAppCloudConfig>((await prisma.connection.findUniqueOrThrow({ where: { id: chosen.connectionId } })).config),
+      chosen.externalId, template.cloudTemplateName!, template.cloudLanguage, parameters,
+    ) : await deliver(chosen.connectionId, chosen.provider, chosen.externalId, text);
+    const receipt = response as { messages?: { id?: string }[]; key?: { id?: string }; id?: string; message_id?: string } | undefined;
+    externalMessageId = receipt?.messages?.[0]?.id ?? receipt?.key?.id ?? receipt?.message_id ?? receipt?.id ?? null;
   } catch (err) {
     status = "failed";
     error = err instanceof Error ? err.message : "Falha ao enviar pelo canal.";
@@ -210,6 +225,7 @@ export async function sendContactMessage(
     connectionId: chosen.connectionId,
     conversationId: opts.conversationId ?? null,
     status,
+    externalMessageId,
   });
   return { ok: true, status, messageId: message.id, connectionId: chosen.connectionId, ...(error ? { error } : {}) };
 }

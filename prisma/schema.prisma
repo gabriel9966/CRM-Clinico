@@ -79,7 +79,7 @@ model User {
   permissions  String   @default("[]")
   // Quando configurado, os acessos abaixo deixam de herdar a visualização
   // ampla legada e passam a ser uma lista explícita por pipeline/conexão.
-  accessConfigured Boolean @default(false)
+  accessConfigured Boolean @default(true)
   isSuperAdmin Boolean  @default(false)
   // Membros inativos (ex: de férias) ficam fora do rodízio de atribuição
   // automática em lib/assignment.ts, mas continuam podendo logar normalmente.

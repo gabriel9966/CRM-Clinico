@@ -108,7 +108,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ con
   });
 
   if (!fromMe && !inbound.duplicate) {
-    await triggerAutomations(organizationId, "MESSAGE_RECEIVED", { contactId });
+    await triggerAutomations(organizationId, "MESSAGE_RECEIVED", { contactId, connectionId, payload: { connectionId, text, messageId: data?.key?.id } });
     await markCampaignResponse(organizationId, contactId, connectionId);
   }
 

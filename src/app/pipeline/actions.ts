@@ -11,6 +11,7 @@ import { actorOf, audit } from "@/lib/audit";
 import { softDeleteOpportunity } from "@/lib/soft-delete";
 import { syncTags } from "@/lib/crm-catalog";
 import { canAccessPipeline, hasModulePermission } from "@/lib/access";
+import { enforceStagePolicy } from "@/lib/stage-policy";
 import type { ImportSummary } from "@/app/contacts/actions";
 
 export type OpportunityStageHistoryDTO = {
@@ -227,20 +228,7 @@ async function assertOpportunityRefs(organizationId: string, data: OpportunityIn
 }
 
 async function assertStagePolicy(stageId: string, data: OpportunityInput, user: Awaited<ReturnType<typeof requireOrgUser>>) {
-  const stage = await prisma.stage.findUnique({ where: { id: stageId }, select: { status: true, requiredFields: true, allowedTeams: true, requireLossReason: true } });
-  if (!stage) return;
-  const parse = (raw: string) => { try { const v = JSON.parse(raw); return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []; } catch { return []; } };
-  const teams = parse(stage.allowedTeams);
-  if (user.role !== "ADMIN" && teams.length && !teams.includes(user.team)) throw new Error("Seu time não tem permissão para esta etapa.");
-  if ((stage.status === "LOST" || stage.requireLossReason) && !data.lossReasonId) throw new Error("Informe o motivo de perda para mover a oportunidade a esta etapa.");
-  const missing = parse(stage.requiredFields).filter((field) => {
-    if (field === "title") return !data.title.trim();
-    if (field === "value") return !Number.isFinite(data.value) || data.value <= 0;
-    if (field === "ownerId") return !data.ownerId;
-    if (field === "expectedClose") return !data.expectedClose;
-    return data.customFields?.[field] === undefined || data.customFields?.[field] === "";
-  });
-  if (missing.length) throw new Error(`Preencha os campos obrigatórios: ${missing.join(", ")}.`);
+  await enforceStagePolicy(user.organizationId, data.pipelineId, stageId, data, user);
 }
 
 export async function createOpportunity(data: OpportunityInput) {

@@ -94,8 +94,8 @@ async function noteAgentError(agentId: string, message: string | null) {
  * automações. Mensagens que chegam enquanto ainda responde não geram respostas
  * em paralelo: a execução corrente confere, ao terminar, se há mensagem nova.
  */
-export async function respondWithAgent(input: { organizationId: string; contactId: string; agentId: string }): Promise<AgentRunResult> {
-  const key = `${input.agentId}:${input.contactId}`;
+export async function respondWithAgent(input: { organizationId: string; contactId: string; agentId: string; connectionId?: string }): Promise<AgentRunResult> {
+  const key = `${input.agentId}:${input.contactId}:${input.connectionId ?? "default"}`;
   if (inflight.has(key)) return { status: "skipped", reason: "já existe uma resposta em andamento para este contato" };
   inflight.add(key);
   try {
@@ -107,7 +107,7 @@ export async function respondWithAgent(input: { organizationId: string; contactI
   }
 }
 
-async function respondOnce(input: { organizationId: string; contactId: string; agentId: string }): Promise<Internal> {
+async function respondOnce(input: { organizationId: string; contactId: string; agentId: string; connectionId?: string }): Promise<Internal> {
   const { organizationId, contactId, agentId } = input;
   const skipped = (reason: string): Internal => ({ status: "skipped", reason });
 
@@ -119,7 +119,7 @@ async function respondOnce(input: { organizationId: string; contactId: string; a
     prisma.contact.findFirst({ where: { id: contactId, organizationId }, select: { id: true, name: true } }),
     prisma.organization.findUnique({ where: { id: organizationId }, select: { name: true, timezone: true } }),
     prisma.message.findFirst({
-      where: { organizationId, contactId, direction: "in" },
+      where: { organizationId, contactId, direction: "in", ...(input.connectionId ? { connectionId: input.connectionId } : {}) },
       orderBy: { time: "desc" },
       select: { id: true, time: true, conversationId: true },
     }),
@@ -196,7 +196,7 @@ async function respondOnce(input: { organizationId: string; contactId: string; a
 
   // ── Antes de enviar: algo mudou enquanto a IA pensava? ──
   const [newerInbound, humanReplied, pausedNow] = await Promise.all([
-    prisma.message.findFirst({ where: { organizationId, contactId, direction: "in", time: { gt: lastInbound.time } }, select: { id: true } }),
+    prisma.message.findFirst({ where: { organizationId, contactId, conversationId: conversation.id, direction: "in", time: { gt: lastInbound.time } }, select: { id: true } }),
     prisma.message.findFirst({ where: { organizationId, contactId, conversationId: conversation.id, direction: "out", senderId: { not: null }, time: { gt: lastInbound.time } }, select: { id: true } }),
     prisma.conversation.findFirst({ where: { id: conversation.id, organizationId, aiPausedAt: { not: null } }, select: { id: true } }),
   ]);

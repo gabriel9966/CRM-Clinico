@@ -1,6 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
-import { mcpCreateContact, mcpCreateOpportunity, mcpSendMessage } from "@/lib/mcp-tools";
+import { mcpCreateContact, mcpCreateOpportunity, mcpMoveOpportunityStage, mcpSendMessage } from "@/lib/mcp-tools";
 import { recordStageChange } from "@/lib/pipeline-history";
 import { syncTags } from "@/lib/crm-catalog";
 import { runCode } from "./sandbox";
@@ -8,6 +8,7 @@ import type { Flow, FlowNode, NodeData } from "./types";
 
 type RunContext = {
   organizationId: string;
+  connectionId?: string | null;
   contactId?: string | null;
   opportunityId?: string | null;
   appointmentId?: string | null;
@@ -84,7 +85,10 @@ async function runActionNode(node: Extract<NodeData, { kind: "action" }>, ctx: R
   switch (node.actionType) {
     case "send_message": {
       if (!ctx.contactId || !config.text) return { ok: false, reason: "sem contato ou texto" };
-      return mcpSendMessage(orgId, ctx.contactId, String(config.text));
+      const payloadConnection = ctx.payload && typeof ctx.payload === "object" ? (ctx.payload as { connectionId?: string }).connectionId : undefined;
+      const connectionId = ctx.connectionId ?? payloadConnection;
+      const text = resolveTemplate(config.text, ctx.payload);
+      return connectionId ? mcpSendMessage(orgId, ctx.contactId, text, connectionId) : mcpSendMessage(orgId, ctx.contactId, text);
     }
     case "create_task": {
       if (!ctx.contactId && !ctx.opportunityId) return { ok: false, reason: "sem contato/oportunidade" };
@@ -103,12 +107,7 @@ async function runActionNode(node: Extract<NodeData, { kind: "action" }>, ctx: R
     }
     case "move_stage": {
       if (!ctx.opportunityId || !config.stageId) return { ok: false, reason: "sem oportunidade/etapa" };
-      const opp = await prisma.opportunity.findFirst({ where: { id: ctx.opportunityId, organizationId: orgId } });
-      if (!opp) return { ok: false, reason: "oportunidade fora da organização" };
-      const newStageId = String(config.stageId);
-      await prisma.opportunity.update({ where: { id: ctx.opportunityId }, data: { stageId: newStageId } });
-      await recordStageChange(prisma, { organizationId: orgId, opportunityId: ctx.opportunityId, newStageId });
-      return { ok: true };
+      return mcpMoveOpportunityStage(orgId, ctx.opportunityId, String(config.stageId));
     }
     case "add_tag": {
       const tag = String(config.tag ?? "").trim();
@@ -194,7 +193,8 @@ async function runActionNode(node: Extract<NodeData, { kind: "action" }>, ctx: R
       if (!ctx.contactId) return { ok: false, reason: "o agente de IA precisa de um contato (use o gatilho “Mensagem recebida”)" };
       if (!config.agentId) return { ok: false, reason: "selecione o agente de IA" };
       const { respondWithAgent } = await import("@/lib/ai/agent");
-      const outcome = await respondWithAgent({ organizationId: orgId, contactId: ctx.contactId, agentId: String(config.agentId) });
+      const connectionId = ctx.connectionId ?? (ctx.payload && typeof ctx.payload === "object" ? (ctx.payload as { connectionId?: string }).connectionId : undefined);
+      const outcome = await respondWithAgent({ organizationId: orgId, contactId: ctx.contactId, agentId: String(config.agentId), connectionId: connectionId ?? undefined });
       // "pulado" (IA pausada, atendente assumiu…) é um desfecho normal, não falha.
       return outcome.status === "error" ? { ok: false, reason: outcome.reason ?? "falha do agente de IA" } : { ok: true, ...outcome };
     }
@@ -329,6 +329,7 @@ export async function triggerAutomations(
   organizationId: string,
   trigger: string,
   ctx: {
+    connectionId?: string;
     contactId?: string | null;
     opportunityId?: string | null;
     appointmentId?: string | null;
@@ -397,6 +398,7 @@ export async function triggerAutomations(
 
     const execution = executeWithFailureTracking(flow, run.id, firstEdge.target, {
       organizationId,
+      connectionId: ctx.connectionId,
       contactId: ctx.contactId,
       opportunityId: ctx.opportunityId,
       appointmentId: ctx.appointmentId,
@@ -486,7 +488,12 @@ export async function resumeAutomationRun(runId: string) {
   const run = await prisma.automationRun.findUnique({ where: { id: runId }, include: { automation: true, schedule: true } });
   if (!run || !run.schedule) return;
 
-  await prisma.automationSchedule.delete({ where: { id: run.schedule.id } }).catch(() => {});
+  const claimed = await prisma.automationSchedule.deleteMany({ where: { id: run.schedule.id } });
+  if (claimed.count !== 1) return;
+  if (!run.automation.enabled) {
+    await prisma.automationRun.update({ where: { id: run.id }, data: { status: "COMPLETED", finishedAt: new Date() } });
+    return;
+  }
 
   const flow = parseFlow(run.automation.flow);
   const edge = outgoingEdge(flow, run.schedule.nodeId);

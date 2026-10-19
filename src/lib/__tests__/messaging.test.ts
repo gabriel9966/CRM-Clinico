@@ -7,7 +7,7 @@ vi.mock("../crypto", () => ({ decryptJson: vi.fn(() => ({ baseUrl: "http://evo",
 vi.mock("../providers/evolution", () => ({ sendText: vi.fn() }));
 vi.mock("../providers/instagram", () => ({ sendText: vi.fn() }));
 vi.mock("../providers/email", () => ({ sendText: vi.fn() }));
-vi.mock("../providers/whatsapp-cloud", () => ({ sendText: vi.fn() }));
+vi.mock("../providers/whatsapp-cloud", () => ({ sendText: vi.fn(), sendTemplate: vi.fn() }));
 
 const { decryptJson } = await import("../crypto");
 const evolution = await import("../providers/evolution");
@@ -183,6 +183,25 @@ describe("sendContactMessage — toda mensagem sai por um canal real", () => {
 });
 
 describe("getSendOptions", () => {
+  it("template oficial funciona sem janela aberta e registra o id do provedor", async () => {
+    const wa = conn("cloud-1", "WHATSAPP_CLOUD");
+    setup({ channels: [channel(wa, "5547988887777")], connections: [wa] });
+    mockPrisma.messageTemplate.findFirst.mockResolvedValue({ id: "t1", cloudTemplateName: "hello", cloudLanguage: "pt_BR", body: "Olá {{1}}" });
+    vi.mocked(whatsappCloud.sendTemplate).mockResolvedValue({ messages: [{ id: "wamid.123" }] });
+    const result = await sendContactMessage(ORG, "c1", "", { connectionId: "cloud-1", templateId: "t1", templateParameters: ["Maria"] });
+    expect(result).toMatchObject({ ok: true, status: "sent" });
+    expect(whatsappCloud.sendTemplate).toHaveBeenCalledWith(expect.anything(), "5547988887777", "hello", "pt_BR", ["Maria"]);
+    expect(mockPrisma.message.create).toHaveBeenCalledWith({ data: expect.objectContaining({ text: "Olá Maria", externalMessageId: "wamid.123" }) });
+  });
+  it("template de outra organização ou parâmetro ausente é recusado antes do envio", async () => {
+    const wa = conn("cloud-1", "WHATSAPP_CLOUD");
+    setup({ channels: [channel(wa, "5547988887777")], connections: [wa] });
+    mockPrisma.messageTemplate.findFirst.mockResolvedValue(null);
+    expect(await sendContactMessage(ORG, "c1", "", { templateId: "outro" })).toMatchObject({ ok: false });
+    mockPrisma.messageTemplate.findFirst.mockResolvedValue({ cloudTemplateName: "hello", body: "Olá {{1}}" });
+    expect(await sendContactMessage(ORG, "c1", "", { templateId: "t1", templateParameters: [] })).toMatchObject({ ok: false });
+    expect(whatsappCloud.sendTemplate).not.toHaveBeenCalled();
+  });
   it("lista canais existentes e os que podem ser iniciados, marcando desconectados", async () => {
     const ig = conn("ig1", "INSTAGRAM", "DISCONNECTED", "Insta clínica");
     const wa = conn("wa1", "WHATSAPP_EVOLUTION", "CONNECTED", "Recepção");

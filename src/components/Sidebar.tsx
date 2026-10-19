@@ -29,12 +29,12 @@ const NAV_GROUPS = [
   {
     label: "Configurações",
     items: [
-      { href: "/team", label: "Equipe", icon: Icon.team },
+      { href: "/team", label: "Equipe", icon: Icon.team, adminOnly: true },
       { href: "/connections", label: "Conexões", icon: Icon.plug, adminOnly: true },
       { href: "/automations", label: "Automações", icon: Icon.zap, adminOnly: true },
       { href: "/ai", label: "Agentes de IA", icon: Icon.api, adminOnly: true },
       { href: "/tags", label: "Tags", icon: Icon.settings, adminOnly: true },
-      { href: "/custom-fields", label: "Campos extras", icon: Icon.settings },
+      { href: "/custom-fields", label: "Campos extras", icon: Icon.settings, adminOnly: true },
       { href: "/mcp", label: "Integração MCP", icon: Icon.api, adminOnly: true },
     ],
   },

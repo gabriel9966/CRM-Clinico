@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { OfficialTemplateDialog } from "./OfficialTemplateDialog";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Icon } from "@/components/icons";
 import { colorFor, initials, timeAgo, fmtDate, fmtMoney, fmtTime } from "@/lib/format";
@@ -130,6 +131,7 @@ export function ConversationsView({
   const [linkingChannel, setLinkingChannel] = useState(false);
   const [windowNow, setWindowNow] = useState(() => Date.now());
   const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [officialTemplateOpen, setOfficialTemplateOpen] = useState(false);
   const [manageTemplatesOpen, setManageTemplatesOpen] = useState(false);
   const [customerPanelOpen, setCustomerPanelOpen] = useState(false);
   const [customerDetail, setCustomerDetail] = useState<CustomerDetail | null>(null);
@@ -686,7 +688,7 @@ export function ConversationsView({
                       <div key={item.message.id} className={`bubble-row ${item.message.direction === "out" ? "me" : "them"}`}>
                         <div className="bubble">
                           {item.message.text}
-                          <span className="time">{fmtTime(item.message.time)}</span>
+                          <span className="time">{fmtTime(item.message.time)}{item.message.direction === "out" && ` · ${{ sent: "Enviada", delivered: "Entregue", read: "Lida", failed: "Falhou" }[item.message.status] ?? item.message.status}`}</span>
                           {item.message.status === "failed" && <button type="button" className="btn small" disabled={sending || activeRow?.status === "CLOSED" || cloudWindowClosed} onClick={() => retryMessage(item.message.id)}>Tentar novamente</button>}
                           {item.message.status === "failed" && (
                             <span style={{ display: "block", fontSize: 11, fontWeight: 700, color: "#fecaca", marginTop: 2 }}>
@@ -731,6 +733,15 @@ export function ConversationsView({
                     {sendError}
                   </div>
                 )}
+                {activeChannel?.provider === "WHATSAPP_CLOUD" && composerMode === "message" && (
+                  <div className="thread-template-action"><span>{cloudWindowClosed ? "Retome o contato com um template oficial." : "Envie também modelos oficiais da Meta."}</span><button type="button" className="btn small" disabled={!usableChannels.length || activeRow?.status === "CLOSED"} onClick={() => setOfficialTemplateOpen(true)}>Enviar template oficial</button></div>
+                )}
+                {officialTemplateOpen && selectedId && <OfficialTemplateDialog templates={templates.filter((item) => item.cloudApproved && item.cloudTemplateName)} onClose={() => setOfficialTemplateOpen(false)} onSend={async (id, parameters) => {
+                  const result = await sendMessage(selectedId, "", { id, parameters });
+                  if (!result.ok || result.status === "failed") throw new Error(result.error || "O provedor recusou o template.");
+                  setOfficialTemplateOpen(false);
+                  await refreshNow();
+                }} />}
                 <div className="composer-modes"><button type="button" className={composerMode === "message" ? "active" : ""} onClick={() => switchComposerMode("message")}>Mensagem ao cliente</button><button type="button" className={composerMode === "private" ? "active" : ""} onClick={() => switchComposerMode("private")}>Nota privada · só eu</button></div>
                 <form className={`thread-input ${composerMode === "private" ? "private-composer" : ""}`} onSubmit={handleSend} style={{ position: "relative" }}>
                   {composerMode === "message" && (

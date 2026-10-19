@@ -19,11 +19,11 @@ export type GlobalSearchResult = {
 // Busca server-side por contatos (nome/empresa/e-mail/telefone/tags) e
 // oportunidades (título, pelo nome do contato vinculado), limitada a 8
 // resultados por entidade — alimenta a barra de busca global.
-export async function globalSearch(organizationId: string, query: string): Promise<GlobalSearchResult> {
+export async function globalSearch(organizationId: string, query: string, scope: { contacts?: boolean; pipelineIds?: string[] | null } = {}): Promise<GlobalSearchResult> {
   const q = query.trim();
   if (!q) return { contacts: [], opportunities: [] };
 
-  const contacts = await prisma.contact.findMany({
+  const contacts = scope.contacts === false ? [] : await prisma.contact.findMany({
     where: {
       organizationId,
       OR: [
@@ -41,6 +41,7 @@ export async function globalSearch(organizationId: string, query: string): Promi
   const opportunities = await prisma.opportunity.findMany({
     where: {
       organizationId,
+      ...(scope.pipelineIds ? { pipelineId: { in: scope.pipelineIds } } : {}),
       OR: [
         { title: { contains: q, mode: "insensitive" } },
         { contact: { name: { contains: q, mode: "insensitive" } } },

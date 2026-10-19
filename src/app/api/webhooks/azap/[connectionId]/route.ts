@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { guardWebhook } from "@/lib/webhook-auth";
 import { assignNextOwner } from "@/lib/assignment";
-import { createMessage } from "@/lib/messages";
+import { createInboundMessage } from "@/lib/messages";
 import { triggerAutomations } from "@/lib/automation/engine";
 import { logWebhook } from "@/lib/webhook-log";
 import { markCampaignResponse } from "@/lib/campaigns";
@@ -36,9 +36,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ con
   }
   // Contato apagado (lixeira) que volta a escrever: a mensagem vai para um contato ativo.
   const contactId = await ensureLiveContact(channel, connection.organizationId, { name: `WhatsApp ${externalId.slice(-4)}`, phone: `+${externalId}` });
-  await createMessage(prisma, { organizationId: connection.organizationId, contactId, connectionId, text, direction: "in", status: "sent" });
-  await triggerAutomations(connection.organizationId, "MESSAGE_RECEIVED", { contactId });
-  await markCampaignResponse(connection.organizationId, contactId, connectionId);
+  const messageId = pick(body, ["messageId", "message_id", "id"]);
+  const inbound = await createInboundMessage(prisma, { organizationId: connection.organizationId, contactId, connectionId, text, direction: "in", status: "sent", externalMessageId: messageId });
+  if (!inbound.duplicate) {
+    await triggerAutomations(connection.organizationId, "MESSAGE_RECEIVED", { contactId, connectionId, payload: { connectionId, text, messageId } });
+    await markCampaignResponse(connection.organizationId, contactId, connectionId);
+  }
   await logWebhook({ organizationId: connection.organizationId, connectionId, source: "azap", event, statusCode: 200, payload: body });
   return NextResponse.json({ ok: true });
 }

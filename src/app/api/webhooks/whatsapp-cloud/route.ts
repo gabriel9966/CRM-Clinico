@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
       const contactId = await ensureLiveContact(channel, connection.organizationId, { name: profile, phone: `+${externalId}` });
       const inbound = await createInboundMessage(prisma, { organizationId: connection.organizationId, contactId, connectionId: connection.id, text, direction: "in", time: incoming.timestamp ? new Date(Number(incoming.timestamp) * 1000) : new Date(), status: "sent", externalMessageId: incoming.id });
       if (!inbound.duplicate) {
-        await triggerAutomations(connection.organizationId, "MESSAGE_RECEIVED", { contactId });
+        await triggerAutomations(connection.organizationId, "MESSAGE_RECEIVED", { contactId, connectionId: connection.id, payload: { connectionId: connection.id, text, messageId: incoming.id } });
         await markCampaignResponse(connection.organizationId, contactId, connection.id);
       }
       await logWebhook({ organizationId: connection.organizationId, connectionId: connection.id, source: "whatsapp-cloud", event: change.field, statusCode: 200, detail: inbound.duplicate ? "Evento duplicado ignorado" : undefined, payload: incoming });
@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
       for (const status of value?.statuses ?? []) {
         const rawStatus = status.status;
         const id = (status as { id?: string }).id;
-        if (id && rawStatus) await markCampaignDelivery(id, rawStatus);
+        if (id && rawStatus) await markCampaignDelivery(id, rawStatus, connection.id);
       }
       await logWebhook({ organizationId: connection.organizationId, connectionId: connection.id, source: "whatsapp-cloud", event: "status", statusCode: 200, detail: value?.statuses?.map((status) => status.status).join(", "), payload: value?.statuses });
     }

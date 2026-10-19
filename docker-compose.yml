@@ -12,6 +12,7 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379
       - DATABASE_URL=${DATABASE_URL}
+      - BACKGROUND_WORKER_ENABLED=false
     depends_on:
       - redis
     networks:
@@ -19,6 +20,28 @@ services:
       - supabase_default
     ports:
       - "127.0.0.1:3001:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
+
+  worker:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=${DATABASE_URL}
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - default
+      - supabase_default
+    entrypoint: ["node", "--conditions=react-server", "--import", "tsx", "src/worker.ts"]
+    command: []
 
 networks:
   default: {}

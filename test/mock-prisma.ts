@@ -22,6 +22,9 @@ function makeModel() {
 export function createMockPrisma() {
   return {
     user: makeModel(),
+    userPipelineAccess: makeModel(),
+    userConnectionAccess: makeModel(),
+    messageTemplate: makeModel(),
     organization: makeModel(),
     contact: makeModel(),
     contactChannel: makeModel(),

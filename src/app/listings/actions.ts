@@ -3,7 +3,7 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireOrgUser } from "@/lib/auth";
-import { allowedConnectionIds, canAccessConnection, canAccessPipeline, hasModulePermission } from "@/lib/access";
+import { allowedConnectionIds, allowedPipelineIds, canAccessConnection, canAccessPipeline, hasModulePermission } from "@/lib/access";
 import { findDuplicateContacts } from "@/lib/data";
 import { segmentWhere } from "@/lib/segments";
 import {
@@ -56,7 +56,15 @@ export async function fetchContactsPage(query: Omit<ContactListQuery, "extraWher
 export async function fetchContactDetail(contactId: string) {
   const user = await requireOrgUser();
   if (!hasModulePermission(user, "contacts.read")) return null;
-  return getContactDetail(user.organizationId, { id: user.id, role: user.role }, contactId);
+  const [pipelineIds, connectionIds] = await Promise.all([allowedPipelineIds(user), allowedConnectionIds(user)]);
+  return getContactDetail(user.organizationId, {
+    id: user.id, role: user.role,
+    pipelineIds: hasModulePermission(user, "pipeline.read") ? pipelineIds : [],
+    connectionIds,
+    canReadMessages: hasModulePermission(user, "conversations.read"),
+    canReadAgenda: hasModulePermission(user, "agenda.read"),
+    manageConversations: hasModulePermission(user, "conversations.manage"),
+  }, contactId);
 }
 
 export async function fetchDuplicateGroups() {
@@ -119,7 +127,8 @@ export async function fetchConversations(query: {
 export async function fetchThread(contactId: string, cursor?: string) {
   const user = await requireOrgUser();
   if (!hasModulePermission(user, "conversations.read")) return null;
-  return getMessagesPage(user.organizationId, { id: user.id, role: hasModulePermission(user, "conversations.manage") ? "ADMIN" : user.role }, contactId, { cursor });
+  const connectionIds = await allowedConnectionIds(user);
+  return getMessagesPage(user.organizationId, { id: user.id, role: hasModulePermission(user, "conversations.manage") ? "ADMIN" : user.role, connectionIds }, contactId, { cursor });
 }
 
 export async function fetchConversationThread(conversationId: string, cursor?: string) {

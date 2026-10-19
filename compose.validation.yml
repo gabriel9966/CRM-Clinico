@@ -1,0 +1,28 @@
+# Disposable PostgreSQL database: never points at the production database.
+services:
+  database:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: crm_validation
+      POSTGRES_USER: crm_validation
+      POSTGRES_PASSWORD: validation_only
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crm_validation -d crm_validation"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  checks:
+    build:
+      context: .
+      target: builder
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://crm_validation:validation_only@database:5432/crm_validation
+      TEST_DATABASE_URL: postgresql://crm_validation:validation_only@database:5432/crm_validation
+      CONNECTIONS_SECRET: test-connections-secret-not-for-production-use
+      SESSION_SECRET: test-session-secret-not-for-production-use-long-enough
+    command: ["sh", "-c", "npx prisma migrate deploy && npm test"]

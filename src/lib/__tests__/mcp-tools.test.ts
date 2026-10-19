@@ -3,6 +3,7 @@ import { createMockPrisma } from "../../../test/mock-prisma";
 
 const mockPrisma = createMockPrisma();
 vi.mock("../prisma", () => ({ prisma: mockPrisma }));
+vi.mock("../crm-catalog", () => ({ syncTags: vi.fn() }));
 
 // mcp-tools também importa os providers de WhatsApp/Instagram pra enviar
 // mensagens de verdade — mockados aqui pra isolar o teste da lógica de negócio.
@@ -29,6 +30,7 @@ const ORG_B = "org-b";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockPrisma.$transaction.mockImplementation(async (fn) => fn(mockPrisma));
 });
 
 describe("mcp-tools: isolamento multi-tenant", () => {

@@ -4,6 +4,9 @@ import { audit } from "./audit";
 import { sendContactMessage } from "./messaging";
 import { AppError } from "./errors";
 import { softDeleteContacts, softDeleteOpportunity } from "./soft-delete";
+import { enforceStagePolicy } from "./stage-policy";
+import { recordStageChange } from "./pipeline-history";
+import { syncTags } from "./crm-catalog";
 
 function parseTags(raw: string): string[] {
   try {
@@ -112,6 +115,7 @@ export async function mcpCreateContact(
   }
 ) {
   await assertRefs(organizationId, { ownerId: input.ownerId });
+  await syncTags(organizationId, input.tags ?? [], "contact");
   const contact = await prisma.contact.create({
     data: {
       organizationId,
@@ -143,6 +147,7 @@ export async function mcpUpdateContact(
   const existing = await prisma.contact.findFirst({ where: { id: contactId, organizationId } });
   if (!existing) return { error: "contato não encontrado nesta organização" };
   await assertRefs(organizationId, { ownerId: input.ownerId });
+  if (input.tags) await syncTags(organizationId, input.tags, "contact");
 
   const contact = await prisma.contact.update({
     where: { id: contactId },
@@ -224,6 +229,7 @@ export async function mcpCreateOpportunity(
     return { error: "responsável não encontrado nesta organização" };
   }
 
+  await enforceStagePolicy(organizationId, input.pipelineId, input.stageId, input);
   const opp = await prisma.opportunity.create({
     data: {
       organizationId,
@@ -235,6 +241,7 @@ export async function mcpCreateOpportunity(
       ownerId: input.ownerId,
     },
   });
+  await recordStageChange(prisma, { organizationId, opportunityId: opp.id, newStageId: opp.stageId });
   return { id: opp.id };
 }
 
@@ -244,7 +251,11 @@ export async function mcpMoveOpportunityStage(organizationId: string, opportunit
   if (!(await stageInPipeline(organizationId, opp.pipelineId, stageId))) {
     return { ok: false, error: "etapa não encontrada neste pipeline" };
   }
-  await prisma.opportunity.update({ where: { id: opportunityId }, data: { stageId } });
+  await enforceStagePolicy(organizationId, opp.pipelineId, stageId, opp);
+  await prisma.$transaction(async (tx) => {
+    await tx.opportunity.update({ where: { id: opportunityId }, data: { stageId } });
+    await recordStageChange(tx, { organizationId, opportunityId, newStageId: stageId });
+  });
   return { ok: true };
 }
 
@@ -261,10 +272,12 @@ export async function mcpUpdateOpportunity(
   if (input.ownerId && !(await userInOrg(organizationId, input.ownerId))) {
     return { error: "responsável não encontrado nesta organização" };
   }
+  if (input.stageId) await enforceStagePolicy(organizationId, opp.pipelineId, input.stageId, { ...opp, ...input });
   const updated = await prisma.opportunity.update({
     where: { id: opportunityId },
     data: { title: input.title, stageId: input.stageId, value: input.value, ownerId: input.ownerId },
   });
+  if (input.stageId) await recordStageChange(prisma, { organizationId, opportunityId, newStageId: input.stageId });
   return { id: updated.id };
 }
 

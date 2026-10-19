@@ -1,5 +1,5 @@
 import "server-only";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import type {
   ActivityRowDTO,
@@ -169,7 +169,7 @@ export async function getContactsByIds(organizationId: string, ids: string[]): P
   return rows.map(toContactDTO);
 }
 
-export type Viewer = { id: string; role: "ADMIN" | "MEMBER" };
+export type Viewer = { id: string; role: "ADMIN" | "MEMBER"; pipelineIds?: string[] | null; connectionIds?: string[] | null; canReadMessages?: boolean; canReadAgenda?: boolean; manageConversations?: boolean };
 
 /**
  * Detalhe do contato para o modal: negócios e as últimas mensagens. Membro
@@ -180,17 +180,17 @@ export async function getContactDetail(organizationId: string, viewer: Viewer, c
   const contact = await prisma.contact.findFirst({ where: { id: contactId, organizationId } });
   if (!contact) return null;
 
-  const canSeeConversation = viewer.role === "ADMIN" || contact.ownerId === viewer.id;
+  const canSeeConversation = viewer.canReadMessages !== false && (viewer.role === "ADMIN" || viewer.manageConversations || contact.ownerId === viewer.id);
   const [opps, msgs, activities] = await Promise.all([
-    prisma.opportunity.findMany({ where: { organizationId, contactId }, orderBy: { createdAt: "desc" }, take: 100 }),
+    prisma.opportunity.findMany({ where: { organizationId, contactId, ...(viewer.pipelineIds ? { pipelineId: { in: viewer.pipelineIds } } : {}) }, orderBy: { createdAt: "desc" }, take: 100 }),
     canSeeConversation
       ? prisma.message.findMany({
-          where: { organizationId, contactId },
+          where: { organizationId, contactId, ...(viewer.connectionIds ? { connectionId: { in: viewer.connectionIds } } : {}), ...(viewer.role !== "ADMIN" && !viewer.manageConversations ? { conversation: { ownerId: viewer.id } } : {}) },
           orderBy: [{ time: "desc" }, { id: "desc" }],
           take: 100,
         })
       : Promise.resolve([]),
-    prisma.activity.findMany({
+    viewer.canReadAgenda === false ? Promise.resolve([]) : prisma.activity.findMany({
       where: { organizationId, contactId },
       orderBy: [{ done: "asc" }, { dueAt: "asc" }],
       take: 8,
@@ -392,7 +392,7 @@ export async function getMessagesPage(
 
   const limit = clampLimit(opts.limit, 40, 100);
   const rows = await prisma.message.findMany({
-    where: { organizationId, contactId },
+    where: { organizationId, contactId, ...(viewer.connectionIds ? { connectionId: { in: viewer.connectionIds } } : {}) },
     orderBy: [{ time: "desc" }, { id: "desc" }],
     take: limit + 1,
     ...(opts.cursor ? { cursor: { id: opts.cursor }, skip: 1 } : {}),
@@ -513,11 +513,12 @@ export async function getPipelineBoard(
   return board;
 }
 
-export async function searchOpportunities(organizationId: string, q: string, limit = 15) {
+export async function searchOpportunities(organizationId: string, q: string, limit = 15, pipelineIds?: string[] | null) {
   const term = q.trim();
   const rows = await prisma.opportunity.findMany({
     where: {
       organizationId,
+      ...(pipelineIds ? { pipelineId: { in: pipelineIds } } : {}),
       ...(term ? { OR: [{ title: contains(term) }, { contact: { name: contains(term) } }] } : {}),
     },
     include: { contact: { select: { name: true } } },
@@ -632,7 +633,12 @@ export type DashboardAggregates = {
   campaigns: { id: string; name: string; status: string; total: number; sent: number; responded: number; failed: number }[];
 };
 
-export async function getDashboardAggregates(organizationId: string): Promise<DashboardAggregates> {
+export async function getDashboardAggregates(organizationId: string, scope: { pipelineIds?: string[] | null; connectionIds?: string[] | null; ownerId?: string } = {}): Promise<DashboardAggregates> {
+  const dealScope = scope.pipelineIds ? { pipelineId: { in: scope.pipelineIds } } : {};
+  const messageScope = scope.connectionIds ? { connectionId: { in: scope.connectionIds } } : {};
+  const pipelineSql = scope.pipelineIds ? Prisma.sql`AND "pipelineId" = ANY(${scope.pipelineIds}::text[])` : Prisma.empty;
+  const historySql = scope.pipelineIds ? Prisma.sql`AND o."pipelineId" = ANY(${scope.pipelineIds}::text[])` : Prisma.empty;
+  const connectionSql = scope.connectionIds ? Prisma.sql`AND "connectionId" = ANY(${scope.connectionIds}::text[])` : Prisma.empty;
   const now = new Date();
   const weekEnd = new Date(now);
   weekEnd.setDate(weekEnd.getDate() + 7);
@@ -642,16 +648,17 @@ export async function getDashboardAggregates(organizationId: string): Promise<Da
   const [byStage, byOwner, monthly, speed, overdueActivities, dueThisWeek, inactiveContacts, responseRows, messageRows, connections, campaignRows, campaignCounts] = await Promise.all([
     prisma.opportunity.groupBy({
       by: ["stageId"],
-      where: { organizationId },
+      where: { organizationId, ...dealScope },
       _count: { _all: true },
       _sum: { value: true },
     }),
-    prisma.opportunity.groupBy({ by: ["ownerId"], where: { organizationId }, _sum: { value: true } }),
+    prisma.opportunity.groupBy({ by: ["ownerId"], where: { organizationId, ...dealScope }, _sum: { value: true } }),
     // $queryRaw não passa pela extensão da lixeira: "deletedAt" IS NULL é manual.
     prisma.$queryRaw<{ month: string; stageId: string; sum: number | null }[]>`
       SELECT to_char("createdAt", 'YYYY-MM') AS month, "stageId", COALESCE(SUM(value), 0)::float8 AS sum
       FROM "Opportunity"
       WHERE "organizationId" = ${organizationId} AND "deletedAt" IS NULL
+      ${pipelineSql}
       GROUP BY 1, 2`,
     prisma.$queryRaw<{ stageId: string; avgMs: number; count: number }[]>`
       SELECT h."stageId",
@@ -660,11 +667,12 @@ export async function getDashboardAggregates(organizationId: string): Promise<Da
       FROM "OpportunityStageHistory" h
       JOIN "Opportunity" o ON o.id = h."opportunityId" AND o."deletedAt" IS NULL
       WHERE h."organizationId" = ${organizationId}
+        ${historySql}
         AND h."exitedAt" IS NOT NULL AND h."exitedAt" >= h."enteredAt"
       GROUP BY h."stageId"`,
-    prisma.activity.count({ where: { organizationId, done: false, dueAt: { lt: now } } }),
-    prisma.opportunity.count({ where: { organizationId, expectedClose: { gte: now, lte: weekEnd } } }),
-    prisma.contact.count({ where: { organizationId, lastMessageAt: { not: null, lt: inactiveSince } } }),
+    prisma.activity.count({ where: { organizationId, ...(scope.ownerId ? { assigneeId: scope.ownerId } : {}), done: false, dueAt: { lt: now } } }),
+    prisma.opportunity.count({ where: { organizationId, ...dealScope, expectedClose: { gte: now, lte: weekEnd } } }),
+    prisma.contact.count({ where: { organizationId, ...(scope.ownerId ? { ownerId: scope.ownerId } : {}), lastMessageAt: { not: null, lt: inactiveSince } } }),
     // Primeira resposta por conversa: pega a primeira entrada no período e a
     // primeira saída posterior, sem carregar todas as mensagens para a memória.
     prisma.$queryRaw<{ inbound: number; answered: number; avgMs: number | null; slaAnswered: number }[]>`
@@ -672,6 +680,7 @@ export async function getDashboardAggregates(organizationId: string): Promise<Da
         SELECT DISTINCT ON ("conversationId") "conversationId", "time" AS received_at
         FROM "Message"
         WHERE "organizationId" = ${organizationId}
+          ${connectionSql}
           AND direction = 'in'
           AND "conversationId" IS NOT NULL
           AND "time" >= ${reportSince}
@@ -691,19 +700,19 @@ export async function getDashboardAggregates(organizationId: string): Promise<Da
       FROM responses`,
     prisma.message.groupBy({
       by: ["connectionId", "direction", "status"],
-      where: { organizationId, time: { gte: reportSince } },
+      where: { organizationId, ...messageScope, time: { gte: reportSince } },
       _count: { _all: true },
     }),
-    prisma.connection.findMany({ where: { organizationId }, select: { id: true, label: true, provider: true } }),
+    prisma.connection.findMany({ where: { organizationId, ...(scope.connectionIds ? { id: { in: scope.connectionIds } } : {}) }, select: { id: true, label: true, provider: true } }),
     prisma.campaign.findMany({
-      where: { organizationId },
+      where: { organizationId, ...messageScope },
       select: { id: true, name: true, status: true },
       orderBy: { createdAt: "desc" },
       take: 6,
     }),
     prisma.campaignRecipient.groupBy({
       by: ["campaignId", "status"],
-      where: { campaign: { organizationId } },
+      where: { campaign: { organizationId, ...messageScope } },
       _count: { _all: true },
     }),
   ]);

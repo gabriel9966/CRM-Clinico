@@ -161,14 +161,15 @@ export async function processDueCampaigns() {
   for (const campaign of due) await processCampaign(campaign.id);
 }
 
-export async function markCampaignDelivery(providerMessageId: string, status: string) {
+export async function markCampaignDelivery(providerMessageId: string, status: string, connectionId: string) {
   const update = status === "read" ? { status: "READ" as const, readAt: new Date() } : status === "delivered" ? { status: "DELIVERED" as const, deliveredAt: new Date() } : status === "failed" ? { status: "FAILED" as const, failedAt: new Date(), failureReason: "Falha informada pelo provedor." } : null;
   if (!update) return;
-  await prisma.campaignRecipient.updateMany({ where: { providerMessageId }, data: update });
+  const allowed: ("SENT" | "DELIVERED")[] = status === "read" ? ["SENT", "DELIVERED"] : ["SENT"];
+  await prisma.campaignRecipient.updateMany({ where: { providerMessageId, campaign: { connectionId }, status: { in: allowed } }, data: update });
   // A mesma confirmação também atualiza a mensagem apresentada no histórico
   // da conversa (sent → delivered/read/failed), e não só a métrica da campanha.
   const messageStatus = status === "read" ? "read" : status === "delivered" ? "delivered" : "failed";
-  await prisma.message.updateMany({ where: { externalMessageId: providerMessageId }, data: { status: messageStatus } });
+  await prisma.message.updateMany({ where: { connectionId, externalMessageId: providerMessageId, direction: "out", status: { in: status === "read" ? ["sent", "delivered"] : ["sent"] } }, data: { status: messageStatus } });
 }
 
 export async function markCampaignResponse(organizationId: string, contactId: string, connectionId: string) {

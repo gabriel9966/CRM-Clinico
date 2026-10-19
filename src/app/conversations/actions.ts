@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireOrgUser } from "@/lib/auth";
-import { canAccessConnection, hasModulePermission } from "@/lib/access";
+import { canAccessConnection, hasModulePermission, type AccessUser } from "@/lib/access";
 import { getSendOptions, sendContactMessage, type SendErrorCode } from "@/lib/messaging";
 import type { SendOptionDTO } from "@/lib/types";
 import { actorOf, audit } from "@/lib/audit";
@@ -14,20 +14,22 @@ export type SendOutcome =
   | { ok: true; status: "sent" | "failed"; error?: string }
   | { ok: false; code: SendErrorCode | "sem_permissao"; error: string };
 
-async function canTalkTo(user: { id: string; role: string; organizationId: string; accessConfigured: boolean }, contactId: string) {
+async function canTalkTo(user: AccessUser, contactId: string) {
   if (!hasModulePermission(user, "conversations.reply")) return false;
   const contact = await prisma.contact.findFirst({ where: { id: contactId, organizationId: user.organizationId }, select: { ownerId: true } });
-  return Boolean(contact && (user.role === "ADMIN" || contact.ownerId === user.id));
+  return Boolean(contact && (hasModulePermission(user, "conversations.manage") || contact.ownerId === user.id));
 }
 
 /** Used when starting a new conversation from a contact screen. */
 export async function fetchSendOptions(contactId: string): Promise<SendOptionDTO[]> {
   const user = await requireOrgUser();
   if (!(await canTalkTo(user, contactId))) return [];
-  return getSendOptions(user.organizationId, contactId);
+  const options = await getSendOptions(user.organizationId, contactId);
+  const checks = await Promise.all(options.map(async (option) => ({ option, allowed: await canAccessConnection(user, option.connectionId, "send") })));
+  return checks.filter((item) => item.allowed).map((item) => item.option);
 }
 
-async function getConversationForUser(user: { id: string; role: string; organizationId: string; accessConfigured: boolean }, conversationId: string) {
+async function getConversationForUser(user: AccessUser, conversationId: string) {
   if (!hasModulePermission(user, "conversations.read")) return null;
   const conversation = await prisma.conversation.findFirst({
     where: { id: conversationId, organizationId: user.organizationId },
@@ -128,7 +130,7 @@ export async function addPrivateNote(conversationId: string, rawText: string) {
   return { ok: true as const, note: { id: note.id, text: note.text, createdAt: note.createdAt.toISOString() } };
 }
 
-export async function sendMessage(conversationId: string, text: string): Promise<SendOutcome> {
+export async function sendMessage(conversationId: string, text: string, template?: { id: string; parameters: string[] }): Promise<SendOutcome> {
   const user = await requireOrgUser();
   if (!hasModulePermission(user, "conversations.reply")) return { ok: false, code: "sem_permissao", error: "Você não tem permissão para responder atendimentos." };
   const conversation = await getConversationForUser(user, conversationId);
@@ -141,6 +143,8 @@ export async function sendMessage(conversationId: string, text: string): Promise
     connectionId: conversation.connectionId,
     senderId: user.id,
     conversationId: conversation.id,
+    templateId: template?.id,
+    templateParameters: template?.parameters,
   });
   revalidatePath("/conversations");
   if (!result.ok) return { ok: false, code: result.code, error: result.error };

@@ -32,12 +32,12 @@ function getConnection(): IORedis {
   return connection;
 }
 
-export async function initQueue() {
+export async function initQueue(options: { worker?: boolean } = {}) {
   try {
     const conn = getConnection();
     await conn.connect();
     queue = new Queue(QUEUE_NAME, { connection: conn });
-    worker = new Worker(
+    if (options.worker !== false) worker = new Worker(
       QUEUE_NAME,
       async (job) => {
         const { resumeAutomationRun } = await import("./engine");
@@ -45,7 +45,7 @@ export async function initQueue() {
       },
       { connection: conn }
     );
-    worker.on("failed", (job, err) => {
+    worker?.on("failed", (job, err) => {
       console.error("[automations] job da fila falhou:", job?.id, err);
     });
     redisAvailable = true;

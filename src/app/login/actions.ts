@@ -40,7 +40,7 @@ export async function loginAction(
 
   const user = await prisma.user.findUnique({ where: { email }, include: { organization: true } });
   const valid = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_HASH);
-  if (!user || !valid) {
+  if (!user || !valid || !user.isActive) {
     return { error: "E-mail ou senha incorretos." };
   }
 

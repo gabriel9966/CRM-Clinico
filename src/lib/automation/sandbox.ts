@@ -1,5 +1,6 @@
 import "server-only";
-import vm from "node:vm";
+import { executeIsolatedCode } from "./isolated-code";
+import { syncTags } from "@/lib/crm-catalog";
 import {
   mcpListContacts,
   mcpGetContact,
@@ -53,6 +54,8 @@ function buildCrmApi(ctx: SandboxContext, log: (...args: unknown[]) => void) {
     listTeam: () => mcpListTeam(orgId),
     sendMessage: (text: string, contactId?: string) => mcpSendMessage(orgId, contactId ?? ctx.contactId ?? "", text),
     addTag: async (tag: string, target: "contact" | "opportunity" = "contact", id?: string) => {
+      if (target !== "contact" && target !== "opportunity") throw new Error("Tipo de registro inválido.");
+      await syncTags(orgId, [tag], target);
       const targetId = id ?? (target === "contact" ? ctx.contactId : ctx.opportunityId);
       if (!targetId) return { ok: false, reason: "sem alvo" };
       if (target === "contact") {
@@ -86,15 +89,12 @@ function buildCrmApi(ctx: SandboxContext, log: (...args: unknown[]) => void) {
   };
 }
 
-// Executa o código JS do nó "Código" num contexto isolado (módulo `vm` do
-// Node), com `payload`, `contact`, `opportunity` e `crm.*` disponíveis.
-// Aviso: isto roda no mesmo processo do servidor — é um isolamento razoável
-// pra automações que você mesmo escreveu, não uma sandbox à prova de código
-// malicioso de terceiros. O timeout cobre apenas a parte síncrona do código.
+// QuickJS/WASM: heap próprio, sem objetos Node, com limite de memória,
+// tempo síncrono/assíncrono e chamadas. O CRM expõe somente funções com JSON.
 export async function runCode(code: string, ctx: SandboxContext): Promise<SandboxResult> {
   const logs: string[] = [];
   const sandboxConsole = {
-    log: (...args: unknown[]) => logs.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ")),
+    log: (...args: unknown[]) => { if (logs.length < 100) logs.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ").slice(0, 4000)); },
   };
 
   let contact = null;
@@ -114,16 +114,10 @@ export async function runCode(code: string, ctx: SandboxContext): Promise<Sandbo
     appointment: ctx.payload && typeof ctx.payload === "object" ? (ctx.payload as { appointment?: unknown }).appointment ?? null : null,
     contact,
     opportunity,
-    crm: buildCrmApi(ctx, sandboxConsole.log),
-    console: sandboxConsole,
-    __result: undefined as unknown,
   };
 
   try {
-    const context = vm.createContext(sandbox);
-    const script = new vm.Script(`(async () => { ${code}\n })()`);
-    const resultPromise = script.runInContext(context, { timeout: 5000 }) as Promise<unknown>;
-    const result = await resultPromise;
+    const result = await executeIsolatedCode(code, sandbox, buildCrmApi(ctx, sandboxConsole.log), sandboxConsole.log);
     return { ok: true, logs, result };
   } catch (err) {
     return { ok: false, logs, error: err instanceof Error ? err.message : String(err) };

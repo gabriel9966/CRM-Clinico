@@ -3,7 +3,8 @@ export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
 
   const { initQueue } = await import("@/lib/automation/queue");
-  await initQueue();
+  await initQueue({ worker: process.env.BACKGROUND_WORKER_ENABLED !== "false" });
+  if (process.env.BACKGROUND_WORKER_ENABLED === "false") return;
 
   // Rede de segurança: processa agendamentos vencidos direto do banco a cada
   // 60s, mesmo com a fila Redis/BullMQ disponível (cobre o caso raro de um
@@ -11,15 +12,20 @@ export async function register() {
   // dos nós de "Espera" avançarem — então aqui o intervalo importa mais.
   const { processDueSchedulesFallback, processDueTriggerAutomations } = await import("@/lib/automation/engine");
   const { processDueCampaigns } = await import("@/lib/campaigns");
-  setInterval(() => {
-    processDueSchedulesFallback().catch((err) => {
+  let running = false;
+  setInterval(async () => {
+    if (running) return;
+    running = true;
+    try {
+    await processDueSchedulesFallback().catch((err) => {
       console.error("[automations] erro ao processar agendamentos (fallback):", err);
     });
-    processDueTriggerAutomations().catch((err) => {
+    await processDueTriggerAutomations().catch((err) => {
       console.error("[automations] erro ao processar gatilhos de data/inatividade:", err);
     });
-    processDueCampaigns().catch((err) => {
+    await processDueCampaigns().catch((err) => {
       console.error("[campaigns] erro ao processar campanhas:", err);
     });
+    } finally { running = false; }
   }, 60_000);
 }

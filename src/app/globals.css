@@ -959,6 +959,10 @@ tr.row:last-child td{border-bottom:none;}
 .ai-note{font-size:var(--fs-sm); color:var(--orange); font-weight:600;}
 .ai-chat-input{display:flex; gap:var(--space-2); padding:var(--space-3) var(--space-5); border-top:1px solid var(--border-soft);}
 .ai-chat-input input{flex:1;}
+.thread-template-action{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 16px;border-top:1px solid var(--border-soft);font-size:12px;color:var(--text-soft);flex-wrap:wrap;}
+.official-template-preview{border:1px solid var(--border);border-radius:12px;padding:16px;background:var(--bg-soft,#f8fafc);}
+.official-template-preview>span{font-size:10px;letter-spacing:.06em;color:var(--text-faint);font-weight:700;}
+.official-template-preview p{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5;}
 @media (max-width:900px){
   .ai-intro{grid-template-columns:1fr;}
   .ai-intro-side{padding-left:0; border-left:0; border-top:1px solid var(--border-soft); padding-top:var(--space-3);}
