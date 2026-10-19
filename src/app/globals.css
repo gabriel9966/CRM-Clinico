@@ -267,8 +267,14 @@ input[type=checkbox], input[type=radio]{accent-color:var(--primary);}
 .pipeline-side-item:hover{background:var(--primary-soft); color:var(--text);}
 .pipeline-side-item.active{background:var(--primary); color:#fff;}
 @media (max-width:900px){
-  .pipeline-content{flex-direction:column;}
+  /* stretch: com flex-start a coluna principal assumia a largura do quadro
+     inteiro (2000px+) e cortava indicadores e busca no celular. */
+  .pipeline-content{flex-direction:column; align-items:stretch;}
+  .pipeline-main{width:100%;}
   .pipeline-side{flex:none; width:100%; position:static;}
+  .pipeline-main .stats-row{grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px;}
+  /* A busca ocupa a linha toda e os filtros quebram embaixo (!important vence o style inline). */
+  .pipeline-main .search-bar{flex:1 1 100% !important; min-width:100%; max-width:none !important;}
 }
 
 /* ---------- Stage editor ---------- */
