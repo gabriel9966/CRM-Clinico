@@ -22,8 +22,8 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # Variáveis fictícias só pra satisfazer validações em tempo de build
 # (nenhuma rota é pré-renderizada estaticamente — tudo é dinâmico/autenticado).
 ENV DATABASE_URL="postgresql://postgres:placeholder@localhost:5432/postgres"
-ENV SESSION_SECRET="build-time-placeholder"
-ENV CONNECTIONS_SECRET="build-time-placeholder"
+ENV SESSION_SECRET="build-time-placeholder-not-used-at-runtime-0000"
+ENV CONNECTIONS_SECRET="build-time-placeholder-not-used-at-runtime-0000"
 RUN npm run build
 
 # ---------- runtime ----------
