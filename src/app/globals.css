@@ -570,7 +570,7 @@ tr.row:last-child td{border-bottom:none;}
 .modal-head{display:flex; align-items:center; justify-content:space-between; padding:var(--space-5) var(--space-6) var(--space-4); border-bottom:1px solid var(--border-soft);}
 .modal-head h2{margin:0; font-size:var(--fs-lg); font-weight:650; letter-spacing:-.012em;}
 .modal-body{padding:var(--space-5) var(--space-6);}
-.modal-foot{display:flex; justify-content:flex-end; gap:var(--space-2); padding:var(--space-4) var(--space-6); border-top:1px solid var(--border-soft); background-color:var(--surface-soft); border-radius:0 0 var(--radius-lg) var(--radius-lg);}
+.modal-foot{position:sticky; bottom:0; z-index:2; display:flex; justify-content:flex-end; gap:var(--space-2); padding:var(--space-4) var(--space-6); border-top:1px solid var(--border-soft); background-color:var(--surface-soft); border-radius:0 0 var(--radius-lg) var(--radius-lg);}
 @keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
 @keyframes popIn{from{opacity:0; transform:translateY(10px) scale(.97);}to{opacity:1; transform:none;}}
 
@@ -799,7 +799,7 @@ tr.row:last-child td{border-bottom:none;}
 .cal-board{display:flex; flex-direction:column; gap:10px;}
 .cal-toolbar{display:flex; align-items:center; flex-wrap:wrap; gap:10px 14px;}
 .cal-nav{display:inline-flex; gap:4px;}
-.cal-title{margin:0; font-size:15px; font-weight:800; letter-spacing:-.01em; text-transform:capitalize;}
+.cal-title{margin:0; font-size:15px; font-weight:800; letter-spacing:-.01em;}
 .cal-date{border:1px solid var(--border); border-radius:8px; padding:4px 8px; font:inherit; font-size:12px; background:var(--panel); color:var(--text);}
 .cal-legend{display:inline-flex; flex-wrap:wrap; gap:10px; margin-left:auto; font-size:11px; font-weight:600; color:var(--text-faint);}
 .cal-legend span{display:inline-flex; align-items:center; gap:5px;}
@@ -830,6 +830,8 @@ tr.row:last-child td{border-bottom:none;}
 .cal-event span{font-size:10px; font-weight:800; color:var(--event-color); font-variant-numeric:tabular-nums;}
 .cal-event strong{font-size:11px; line-height:1.25; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
 .cal-event small{font-size:10px; color:var(--text-soft); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.cal-event.compact{flex-direction:row; align-items:center; gap:5px; padding:2px 6px;}
+.cal-event.compact strong{min-width:0;}
 .cal-month{display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); background:var(--panel); border:1px solid var(--border-soft); border-radius:var(--radius); box-shadow:var(--shadow); overflow:hidden;}
 .cal-month-head{padding:8px; text-align:center; font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.04em; color:var(--text-faint); border-bottom:1px solid var(--border-soft);}
 .cal-month-cell{min-height:104px; display:flex; flex-direction:column; gap:3px; padding:5px; border-top:1px solid var(--border-soft); border-left:1px solid var(--border-soft); cursor:pointer; min-width:0;}
