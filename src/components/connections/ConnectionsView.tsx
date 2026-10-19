@@ -164,6 +164,13 @@ export function ConnectionsView({ connections, inboundWebhooks, webhookLogs }: {
             ))}
           </div>
         )}
+
+        {/* Dentro do .content para herdar o mesmo recuo lateral da página. */}
+        <section className="connections-operations">
+          <div className="section-heading"><div><h2>Entradas por formulário e webhook</h2><p>Crie leads a partir de formulários, landing pages e outras ferramentas com mapeamento de campos.</p></div><button className="btn primary small" onClick={() => setModal("inbound")}>Criar entrada</button></div>
+          {inboundWebhooks.length === 0 ? <div className="muted">Nenhuma entrada configurada.</div> : <div className="inbound-list">{inboundWebhooks.map((item) => <div className="inbound-row" key={item.id}><div><strong>{item.name}</strong><span>{item.enabled ? "Ativa" : "Pausada"}</span></div><div><button className="btn small" onClick={() => toggleInboundWebhook(item.id, !item.enabled).then(() => router.refresh())}>{item.enabled ? "Pausar" : "Ativar"}</button><button className="btn small danger" onClick={() => deleteInboundWebhook(item.id).then(() => router.refresh())}><Icon.trash /></button></div></div>)}</div>}
+        </section>
+        <section className="connections-operations"><div className="section-heading"><div><h2>Logs de webhook</h2><p>Últimos eventos recebidos de suas instâncias e integrações.</p></div></div><div className="webhook-log-list">{webhookLogs.length === 0 ? <span className="muted">Nenhum evento recebido ainda.</span> : webhookLogs.map((log) => <div className="webhook-log" key={log.id}><span className={log.statusCode >= 400 ? "error" : "ok"}>{log.statusCode}</span><strong>{log.source}</strong><span>{log.event || "evento"}</span><small>{log.detail || "Processado"} · {new Date(log.createdAt).toLocaleString("pt-BR")}</small></div>)}</div></section>
       </div>
 
       {reconnectId && <ReconnectDialog id={reconnectId} onClose={() => setReconnectId(null)} />}
@@ -197,12 +204,6 @@ export function ConnectionsView({ connections, inboundWebhooks, webhookLogs }: {
       {modal === "azap" && <AzapModal onClose={() => setModal(null)} />}
       {modal === "cloud" && <CloudModal onClose={() => setModal(null)} />}
       {modal === "inbound" && <InboundModal onClose={() => setModal(null)} />}
-
-      <section className="connections-operations">
-        <div className="section-heading"><div><h2>Entradas por formulário e webhook</h2><p>Crie leads a partir de formulários, landing pages e outras ferramentas com mapeamento de campos.</p></div><button className="btn primary small" onClick={() => setModal("inbound")}>Criar entrada</button></div>
-        {inboundWebhooks.length === 0 ? <div className="muted">Nenhuma entrada configurada.</div> : <div className="inbound-list">{inboundWebhooks.map((item) => <div className="inbound-row" key={item.id}><div><strong>{item.name}</strong><span>{item.enabled ? "Ativa" : "Pausada"}</span></div><div><button className="btn small" onClick={() => toggleInboundWebhook(item.id, !item.enabled).then(() => router.refresh())}>{item.enabled ? "Pausar" : "Ativar"}</button><button className="btn small danger" onClick={() => deleteInboundWebhook(item.id).then(() => router.refresh())}><Icon.trash /></button></div></div>)}</div>}
-      </section>
-      <section className="connections-operations"><div className="section-heading"><div><h2>Logs de webhook</h2><p>Últimos eventos recebidos de suas instâncias e integrações.</p></div></div><div className="webhook-log-list">{webhookLogs.length === 0 ? <span className="muted">Nenhum evento recebido ainda.</span> : webhookLogs.map((log) => <div className="webhook-log" key={log.id}><span className={log.statusCode >= 400 ? "error" : "ok"}>{log.statusCode}</span><strong>{log.source}</strong><span>{log.event || "evento"}</span><small>{log.detail || "Processado"} · {new Date(log.createdAt).toLocaleString("pt-BR")}</small></div>)}</div></section>
     </>
   );
 }
