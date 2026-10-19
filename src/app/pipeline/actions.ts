@@ -10,7 +10,7 @@ import { recordStageChange } from "@/lib/pipeline-history";
 import { actorOf, audit } from "@/lib/audit";
 import { softDeleteOpportunity } from "@/lib/soft-delete";
 import { syncTags } from "@/lib/crm-catalog";
-import { canAccessPipeline, hasModulePermission } from "@/lib/access";
+import { assertOwnerInScope, canAccessPipeline, hasModulePermission } from "@/lib/access";
 import { enforceStagePolicy } from "@/lib/stage-policy";
 import type { ImportSummary } from "@/app/contacts/actions";
 
@@ -268,6 +268,7 @@ export async function updateOpportunity(id: string, data: OpportunityInput) {
   const before = await prisma.opportunity.findFirst({ where: { id, organizationId } });
   if (!before) return;
   if (!hasModulePermission(user, "pipeline.write") || !(await canAccessPipeline(user, before.pipelineId, "edit")) || !(await canAccessPipeline(user, data.pipelineId, "edit"))) throw new Error("Sem permissão para alterar este pipeline.");
+  await assertOwnerInScope(user, before.ownerId);
   const lossReason = await assertOpportunityRefs(organizationId, data);
   await assertStagePolicy(data.stageId, data, user);
   await syncTags(organizationId, data.tags, "opportunity");
@@ -302,8 +303,9 @@ export async function updateOpportunity(id: string, data: OpportunityInput) {
 export async function deleteOpportunity(id: string) {
   const user = await requireOrgUser();
   const { organizationId } = user;
-  const opportunity = await prisma.opportunity.findFirst({ where: { id, organizationId }, select: { pipelineId: true } });
+  const opportunity = await prisma.opportunity.findFirst({ where: { id, organizationId }, select: { pipelineId: true, ownerId: true } });
   if (!hasModulePermission(user, "pipeline.write") || !opportunity || !(await canAccessPipeline(user, opportunity.pipelineId, "edit"))) throw new Error("Sem permissão para excluir este negócio.");
+  await assertOwnerInScope(user, opportunity.ownerId);
   const res = await softDeleteOpportunity(prisma, organizationId, id);
   if (res.count > 0) {
     await audit(organizationId, { action: "opportunity.deleted", entity: "Opportunity", entityId: id, ...actorOf(user) });
@@ -480,6 +482,7 @@ export async function moveOpportunityStage(id: string, stageId: string) {
   const existing = await prisma.opportunity.findFirst({ where: { id, organizationId } });
   if (!existing) return;
   if (!hasModulePermission(user, "pipeline.write") || !(await canAccessPipeline(user, existing.pipelineId, "edit"))) throw new Error("Sem permissão para alterar este pipeline.");
+  await assertOwnerInScope(user, existing.ownerId);
   // A etapa de destino precisa ser do mesmo pipeline (e da mesma organização).
   const target = await prisma.stage.findFirst({
     where: { id: stageId, pipelineId: existing.pipelineId, pipeline: { organizationId } },

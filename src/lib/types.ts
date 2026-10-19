@@ -203,6 +203,9 @@ export type TeamMemberDTO = {
   role: "ADMIN" | "MEMBER";
   permissions: string[];
   accessConfigured: boolean;
+  /** Carteira: own | team | all. */
+  dataScope: string;
+  seeUnassigned: boolean;
   pipelineAccesses: { pipelineId: string; canView: boolean; canEdit: boolean }[];
   connectionAccesses: { connectionId: string; canView: boolean; canSend: boolean }[];
   isActive: boolean;

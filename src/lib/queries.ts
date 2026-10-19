@@ -1,4 +1,5 @@
 import "server-only";
+import { ownerInScope, scopeWhere, type OwnerScope } from "./access-scope";
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import type {
@@ -105,12 +106,14 @@ export type ContactListQuery = {
   limit?: number;
   /** Cláusula extra montada no servidor (ex.: lista salva). Nunca vem do cliente. */
   extraWhere?: Prisma.ContactWhereInput;
+  /** Carteira visível (montada no servidor a partir do usuário). */
+  scope?: OwnerScope;
 };
 
 export async function getContactsPage(organizationId: string, query: ContactListQuery = {}): Promise<Page<ContactRowDTO>> {
   const limit = clampLimit(query.limit);
   const q = query.q?.trim();
-  const where: Prisma.ContactWhereInput = {
+  let where: Prisma.ContactWhereInput = {
     organizationId,
     ...(query.ownerId === "unassigned" ? { ownerId: null } : query.ownerId ? { ownerId: query.ownerId } : {}),
     ...(query.team ? { owner: { team: query.team } } : {}),
@@ -119,6 +122,7 @@ export async function getContactsPage(organizationId: string, query: ContactList
     ...(q ? contactSearchWhere(q) : {}),
     ...(query.extraWhere ?? {}),
   };
+  if (query.scope) where = { AND: [where, scopeWhere(query.scope) as Prisma.ContactWhereInput] };
 
   const [rows, total] = await Promise.all([
     prisma.contact.findMany({
@@ -151,10 +155,10 @@ export async function getContactsPage(organizationId: string, query: ContactList
 }
 
 /** Busca por digitação para seletores (agendamento, tarefa, novo negócio…). */
-export async function searchContacts(organizationId: string, q: string, limit = 15) {
+export async function searchContacts(organizationId: string, q: string, limit = 15, scope?: OwnerScope) {
   const term = q.trim();
   const rows = await prisma.contact.findMany({
-    where: { organizationId, ...(term ? contactSearchWhere(term) : {}) },
+    where: { organizationId, ...(term ? contactSearchWhere(term) : {}), ...(scope ? { AND: [scopeWhere(scope) as Prisma.ContactWhereInput] } : {}) },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: clampLimit(limit, 15, 30),
     select: { id: true, name: true, company: true, phone: true, email: true },
@@ -169,7 +173,7 @@ export async function getContactsByIds(organizationId: string, ids: string[]): P
   return rows.map(toContactDTO);
 }
 
-export type Viewer = { id: string; role: "ADMIN" | "MEMBER"; pipelineIds?: string[] | null; connectionIds?: string[] | null; canReadMessages?: boolean; canReadAgenda?: boolean; manageConversations?: boolean };
+export type Viewer = { id: string; role: "ADMIN" | "MEMBER"; pipelineIds?: string[] | null; connectionIds?: string[] | null; canReadMessages?: boolean; canReadAgenda?: boolean; manageConversations?: boolean; /** Definido = aplica a carteira (null = todos). */ ownerScope?: OwnerScope };
 
 /**
  * Detalhe do contato para o modal: negócios e as últimas mensagens. Membro
@@ -179,13 +183,15 @@ export type Viewer = { id: string; role: "ADMIN" | "MEMBER"; pipelineIds?: strin
 export async function getContactDetail(organizationId: string, viewer: Viewer, contactId: string) {
   const contact = await prisma.contact.findFirst({ where: { id: contactId, organizationId } });
   if (!contact) return null;
+  const scoped = viewer.ownerScope !== undefined;
+  if (scoped && !ownerInScope(viewer.ownerScope ?? null, contact.ownerId)) return null;
 
-  const canSeeConversation = viewer.canReadMessages !== false && (viewer.role === "ADMIN" || viewer.manageConversations || contact.ownerId === viewer.id);
+  const canSeeConversation = viewer.canReadMessages !== false && (scoped || viewer.role === "ADMIN" || viewer.manageConversations || contact.ownerId === viewer.id);
   const [opps, msgs, activities] = await Promise.all([
     prisma.opportunity.findMany({ where: { organizationId, contactId, ...(viewer.pipelineIds ? { pipelineId: { in: viewer.pipelineIds } } : {}) }, orderBy: { createdAt: "desc" }, take: 100 }),
     canSeeConversation
       ? prisma.message.findMany({
-          where: { organizationId, contactId, ...(viewer.connectionIds ? { connectionId: { in: viewer.connectionIds } } : {}), ...(viewer.role !== "ADMIN" && !viewer.manageConversations ? { conversation: { ownerId: viewer.id } } : {}) },
+          where: { organizationId, contactId, ...(viewer.connectionIds ? { connectionId: { in: viewer.connectionIds } } : {}), ...(scoped ? (viewer.ownerScope ? { conversation: scopeWhere(viewer.ownerScope) as Prisma.ConversationWhereInput } : {}) : viewer.role !== "ADMIN" && !viewer.manageConversations ? { conversation: { ownerId: viewer.id } } : {}) },
           orderBy: [{ time: "desc" }, { id: "desc" }],
           take: 100,
         })
@@ -250,6 +256,8 @@ function decodeCursor(cursor: string): { t: Date; id: string } | null {
 export type ConversationQuery = {
   conversationId?: string;
   restrictToOwnerId?: string;
+  /** Carteira visível (servidor). */
+  ownerScope?: OwnerScope;
   q?: string;
   cursor?: string;
   limit?: number;
@@ -282,6 +290,7 @@ export async function getConversationsPage(organizationId: string, query: Conver
   const clauses: Prisma.ConversationWhereInput[] = [{ organizationId }];
   if (query.conversationId) clauses.push({ id: query.conversationId });
   if (query.restrictToOwnerId) clauses.push({ ownerId: query.restrictToOwnerId }); // sempre vale
+  if (query.ownerScope) clauses.push(scopeWhere(query.ownerScope) as Prisma.ConversationWhereInput); // idem
   if (query.ownerId === "unassigned") clauses.push({ ownerId: null });
   else if (query.ownerId) clauses.push({ ownerId: query.ownerId });
   if (query.team) clauses.push({ owner: { team: query.team } });
@@ -365,7 +374,8 @@ export async function getConversationMessagesPage(
   opts: { cursor?: string; limit?: number } = {}
 ): Promise<Page<MessageDTO> | null> {
   const conversation = await prisma.conversation.findFirst({ where: { id: conversationId, organizationId }, select: { ownerId: true } });
-  if (!conversation || (viewer.role !== "ADMIN" && conversation.ownerId !== viewer.id)) return null;
+  if (!conversation) return null;
+  if (viewer.ownerScope !== undefined ? !ownerInScope(viewer.ownerScope, conversation.ownerId) : viewer.role !== "ADMIN" && conversation.ownerId !== viewer.id) return null;
   const limit = clampLimit(opts.limit, 40, 100);
   const rows = await prisma.message.findMany({
     where: { organizationId, conversationId },
@@ -390,7 +400,7 @@ export async function getMessagesPage(
 ): Promise<Page<MessageDTO> | null> {
   const contact = await prisma.contact.findFirst({ where: { id: contactId, organizationId }, select: { ownerId: true } });
   if (!contact) return null;
-  if (viewer.role !== "ADMIN" && contact.ownerId !== viewer.id) return null;
+  if (viewer.ownerScope !== undefined ? !ownerInScope(viewer.ownerScope, contact.ownerId) : viewer.role !== "ADMIN" && contact.ownerId !== viewer.id) return null;
 
   const limit = clampLimit(opts.limit, 40, 100);
   const rows = await prisma.message.findMany({
@@ -426,17 +436,17 @@ export async function backfillLastMessages(): Promise<number> {
 
 export type StageSummary = { stageId: string; count: number; sum: number };
 
-export async function getStageSummaries(organizationId: string, pipelineId: string): Promise<StageSummary[]> {
+export async function getStageSummaries(organizationId: string, pipelineId: string, scope?: OwnerScope): Promise<StageSummary[]> {
   const grouped = await prisma.opportunity.groupBy({
     by: ["stageId"],
-    where: { organizationId, pipelineId },
+    where: { organizationId, pipelineId, ...(scope ? { AND: [scopeWhere(scope) as Prisma.OpportunityWhereInput] } : {}) },
     _count: { _all: true },
     _sum: { value: true },
   });
   return grouped.map((g) => ({ stageId: g.stageId, count: g._count._all, sum: g._sum.value ?? 0 }));
 }
 
-export type StageCardsQuery = { ownerId?: string; q?: string; tag?: string; overdue?: boolean; sort?: "newest" | "value" | "close"; cursor?: string; limit?: number };
+export type StageCardsQuery = { ownerId?: string; q?: string; tag?: string; overdue?: boolean; sort?: "newest" | "value" | "close"; cursor?: string; limit?: number; scope?: OwnerScope };
 
 export async function getStageCards(organizationId: string, stageId: string, query: StageCardsQuery = {}): Promise<Page<DealCardDTO>> {
   const limit = clampLimit(query.limit, 30, 60);
@@ -449,6 +459,7 @@ export async function getStageCards(organizationId: string, stageId: string, que
       ...(query.tag ? { tags: { contains: JSON.stringify(query.tag) } } : {}),
       ...(query.overdue ? { expectedClose: { lt: new Date() } } : {}),
       ...(q ? { OR: [{ title: contains(q) }, { contact: { name: contains(q) } }] } : {}),
+      ...(query.scope ? { AND: [scopeWhere(query.scope) as Prisma.OpportunityWhereInput] } : {}),
     },
     include: { contact: { select: { name: true, company: true, channels: { include: { connection: { select: { provider: true } } }, take: 1 } } }, activities: { where: { done: false }, orderBy: { dueAt: "asc" }, take: 1, select: { title: true, dueAt: true } }, items: { select: { name: true }, take: 3 } },
     orderBy: query.sort === "value" ? [{ value: "desc" }, { id: "desc" }] : query.sort === "close" ? [{ expectedClose: "asc" }, { id: "desc" }] : [{ createdAt: "desc" }, { id: "desc" }],
@@ -473,7 +484,7 @@ export type StageColumnDTO = { count: number; sum: number; cards: DealCardDTO[];
 export async function getPipelineBoard(
   organizationId: string,
   pipelineId: string,
-  filters: { ownerId?: string; q?: string; tag?: string; overdue?: boolean; sort?: "newest" | "value" | "close" } = {}
+  filters: { ownerId?: string; q?: string; tag?: string; overdue?: boolean; sort?: "newest" | "value" | "close"; scope?: OwnerScope } = {}
 ): Promise<Record<string, StageColumnDTO>> {
   const stages = await prisma.stage.findMany({ where: { pipelineId, pipeline: { organizationId } }, select: { id: true } });
   if (stages.length === 0) return {};
@@ -481,7 +492,7 @@ export async function getPipelineBoard(
   const q = filters.q?.trim();
   const filtered = Boolean(filters.ownerId || q || filters.tag || filters.overdue);
   const [summaries, pages, filteredSummaries] = await Promise.all([
-    getStageSummaries(organizationId, pipelineId),
+    getStageSummaries(organizationId, pipelineId, filters.scope),
     Promise.all(stages.map((s) => getStageCards(organizationId, s.id, filters))),
     // com filtro, os totais da coluna refletem o que está sendo filtrado
     filtered
@@ -494,6 +505,7 @@ export async function getPipelineBoard(
             ...(filters.tag ? { tags: { contains: JSON.stringify(filters.tag) } } : {}),
             ...(filters.overdue ? { expectedClose: { lt: new Date() } } : {}),
             ...(q ? { OR: [{ title: contains(q) }, { contact: { name: contains(q) } }] } : {}),
+            ...(filters.scope ? { AND: [scopeWhere(filters.scope) as Prisma.OpportunityWhereInput] } : {}),
           },
           _count: { _all: true },
           _sum: { value: true },
@@ -515,11 +527,12 @@ export async function getPipelineBoard(
   return board;
 }
 
-export async function searchOpportunities(organizationId: string, q: string, limit = 15, pipelineIds?: string[] | null) {
+export async function searchOpportunities(organizationId: string, q: string, limit = 15, pipelineIds?: string[] | null, scope?: OwnerScope) {
   const term = q.trim();
   const rows = await prisma.opportunity.findMany({
     where: {
       organizationId,
+      ...(scope ? { AND: [scopeWhere(scope) as Prisma.OpportunityWhereInput] } : {}),
       ...(pipelineIds ? { pipelineId: { in: pipelineIds } } : {}),
       ...(term ? { OR: [{ title: contains(term) }, { contact: { name: contains(term) } }] } : {}),
     },
@@ -635,8 +648,11 @@ export type DashboardAggregates = {
   campaigns: { id: string; name: string; status: string; total: number; sent: number; responded: number; failed: number }[];
 };
 
-export async function getDashboardAggregates(organizationId: string, scope: { pipelineIds?: string[] | null; connectionIds?: string[] | null; ownerId?: string } = {}): Promise<DashboardAggregates> {
-  const dealScope = scope.pipelineIds ? { pipelineId: { in: scope.pipelineIds } } : {};
+export async function getDashboardAggregates(organizationId: string, scope: { pipelineIds?: string[] | null; connectionIds?: string[] | null; ownerId?: string; owners?: OwnerScope } = {}): Promise<DashboardAggregates> {
+  const dealScope: Prisma.OpportunityWhereInput = {
+    ...(scope.pipelineIds ? { pipelineId: { in: scope.pipelineIds } } : {}),
+    ...(scope.owners ? { AND: [scopeWhere(scope.owners) as Prisma.OpportunityWhereInput] } : {}),
+  };
   const messageScope = scope.connectionIds ? { connectionId: { in: scope.connectionIds } } : {};
   const pipelineSql = scope.pipelineIds ? Prisma.sql`AND "pipelineId" = ANY(${scope.pipelineIds}::text[])` : Prisma.empty;
   const historySql = scope.pipelineIds ? Prisma.sql`AND o."pipelineId" = ANY(${scope.pipelineIds}::text[])` : Prisma.empty;
@@ -674,7 +690,7 @@ export async function getDashboardAggregates(organizationId: string, scope: { pi
       GROUP BY h."stageId"`,
     prisma.activity.count({ where: { organizationId, ...(scope.ownerId ? { assigneeId: scope.ownerId } : {}), done: false, dueAt: { lt: now } } }),
     prisma.opportunity.count({ where: { organizationId, ...dealScope, expectedClose: { gte: now, lte: weekEnd } } }),
-    prisma.contact.count({ where: { organizationId, ...(scope.ownerId ? { ownerId: scope.ownerId } : {}), lastMessageAt: { not: null, lt: inactiveSince } } }),
+    prisma.contact.count({ where: { organizationId, ...(scope.owners ? { AND: [scopeWhere(scope.owners) as Prisma.ContactWhereInput] } : scope.ownerId ? { ownerId: scope.ownerId } : {}), lastMessageAt: { not: null, lt: inactiveSince } } }),
     // Primeira resposta por conversa: pega a primeira entrada no período e a
     // primeira saída posterior, sem carregar todas as mensagens para a memória.
     prisma.$queryRaw<{ inbound: number; answered: number; avgMs: number | null; slaAnswered: number }[]>`

@@ -2,7 +2,7 @@ import { getTeamMembers, getPipelines, getCustomFieldDefinitions, findDuplicateC
 import { getContactsPage } from "@/lib/queries";
 import { requireOrgUser } from "@/lib/auth";
 import { ContactsView } from "@/components/contacts/ContactsView";
-import { allowedPipelineIds, hasModulePermission } from "@/lib/access";
+import { allowedPipelineIds, getOwnerScope, hasModulePermission } from "@/lib/access";
 
 export default async function ContactsPage({ searchParams }: { searchParams: Promise<{ q?: string; contact?: string }> }) {
   const user = await requireOrgUser();
@@ -14,7 +14,7 @@ export default async function ContactsPage({ searchParams }: { searchParams: Pro
   // Só a primeira página de contatos vem renderizada; o resto é carregado sob
   // demanda pela tela. Negócios e conversa de cada contato são buscados ao abrir o detalhe.
   const [page, team, pipelines, customFieldDefs, duplicates, segments] = await Promise.all([
-    getContactsPage(organizationId, { q }),
+    getOwnerScope(user).then((scope) => getContactsPage(organizationId, { q, scope })),
     getTeamMembers(organizationId),
     getPipelines(organizationId).then((items) => pipelineIds ? items.filter((item) => pipelineIds.includes(item.id)) : items),
     getCustomFieldDefinitions(organizationId),

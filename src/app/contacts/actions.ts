@@ -9,7 +9,7 @@ import { importOptOut, importRows, importTags, phoneKey } from "@/lib/crm-import
 import { actorOf, audit } from "@/lib/audit";
 import { syncTags } from "@/lib/crm-catalog";
 import { softDeleteContacts } from "@/lib/soft-delete";
-import { hasModulePermission } from "@/lib/access";
+import { assertOwnerInScope, getOwnerScope, hasModulePermission, scopeWhere } from "@/lib/access";
 
 export type ContactInput = {
   name: string;
@@ -65,6 +65,7 @@ export async function updateContact(id: string, data: ContactInput) {
   if (!hasModulePermission(user, "contacts.write")) throw new Error("Sem permissão para alterar contatos.");
   const before = await prisma.contact.findFirst({ where: { id, organizationId } });
   if (!before) return;
+  await assertOwnerInScope(user, before.ownerId);
   const beforeTags = parseTags(before.tags);
 
   await syncTags(organizationId, data.tags, "contact");
@@ -108,6 +109,9 @@ export async function deleteContact(id: string) {
   const user = await requireOrgUser();
   if (!hasModulePermission(user, "contacts.write")) throw new Error("Sem permissão para excluir contatos.");
   const { organizationId } = user;
+  const target = await prisma.contact.findFirst({ where: { id, organizationId }, select: { ownerId: true } });
+  if (!target) return;
+  await assertOwnerInScope(user, target.ownerId);
   const res = await softDeleteContacts(prisma, organizationId, [id]);
   if (res.count > 0) {
     await audit(organizationId, { action: "contact.deleted", entity: "Contact", entityId: id, ...actorOf(user) });
@@ -122,7 +126,11 @@ export async function deleteContact(id: string) {
 export async function bulkUpdateContacts(ids: string[], input: { ownerId?: string | null; addTags?: string[]; removeTags?: string[]; delete?: boolean }) {
   const user = await requireOrgUser();
   if (!hasModulePermission(user, "contacts.write")) throw new Error("Sem permissão para alterar contatos.");
-  const contactIds = [...new Set(ids)].slice(0, 500);
+  const owners = await getOwnerScope(user);
+  const contactIds = (await prisma.contact.findMany({
+    where: { id: { in: [...new Set(ids)].slice(0, 500) }, organizationId: user.organizationId, ...(owners ? { AND: [scopeWhere(owners)] } : {}) },
+    select: { id: true },
+  })).map((c) => c.id);
   if (!contactIds.length) return;
   if (input.delete) {
     await softDeleteContacts(prisma, user.organizationId, contactIds);
@@ -160,6 +168,7 @@ export async function mergeContacts(keepId: string, mergeIds: string[]) {
     prisma.contact.findMany({ where: { id: { in: loserIds }, organizationId } }),
   ]);
   if (!keep || losers.length === 0) return;
+  for (const c of [keep, ...losers]) await assertOwnerInScope(user, c.ownerId);
 
   const mergedTags = new Set(parseTags(keep.tags));
   const mergedNotes: string[] = keep.notes ? [keep.notes] : [];

@@ -1,6 +1,7 @@
 import "server-only";
 import { prisma } from "./prisma";
 import type { ContactDTO, OpportunityDTO } from "./types";
+import { scopeWhere, type OwnerScope } from "./access-scope";
 
 function parseTags(raw: string): string[] {
   try {
@@ -19,7 +20,7 @@ export type GlobalSearchResult = {
 // Busca server-side por contatos (nome/empresa/e-mail/telefone/tags) e
 // oportunidades (título, pelo nome do contato vinculado), limitada a 8
 // resultados por entidade — alimenta a barra de busca global.
-export async function globalSearch(organizationId: string, query: string, scope: { contacts?: boolean; pipelineIds?: string[] | null } = {}): Promise<GlobalSearchResult> {
+export async function globalSearch(organizationId: string, query: string, scope: { contacts?: boolean; pipelineIds?: string[] | null; owners?: OwnerScope } = {}): Promise<GlobalSearchResult> {
   const q = query.trim();
   if (!q) return { contacts: [], opportunities: [] };
 
@@ -33,6 +34,7 @@ export async function globalSearch(organizationId: string, query: string, scope:
         { phone: { contains: q } },
         { tags: { contains: q, mode: "insensitive" } },
       ],
+      ...(scope.owners ? { AND: [scopeWhere(scope.owners)] } : {}),
     },
     orderBy: { createdAt: "desc" },
     take: 8,
@@ -46,6 +48,7 @@ export async function globalSearch(organizationId: string, query: string, scope:
         { title: { contains: q, mode: "insensitive" } },
         { contact: { name: { contains: q, mode: "insensitive" } } },
       ],
+      ...(scope.owners ? { AND: [scopeWhere(scope.owners)] } : {}),
     },
     include: { contact: { select: { name: true } } },
     orderBy: { createdAt: "desc" },

@@ -2,13 +2,14 @@ import { getConnections, getPipelines, getTeamMembers, getMessageTemplates } fro
 import { listTags } from "@/lib/crm-catalog";
 import { getConversationMessagesPage, getConversationsPage } from "@/lib/queries";
 import { requireOrgUser } from "@/lib/auth";
-import { allowedConnectionIds, allowedPipelineIds, hasModulePermission } from "@/lib/access";
+import { allowedConnectionIds, allowedPipelineIds, getOwnerScope, hasModulePermission } from "@/lib/access";
 import { getSendOptions } from "@/lib/messaging";
 import { listAiAgentOptions } from "@/lib/ai/queries";
 import { ConversationsView } from "@/components/conversations/ConversationsView";
 
 export default async function ConversationsPage({ searchParams }: { searchParams: Promise<{ conversation?: string }> }) {
   const user = await requireOrgUser();
+  const ownerScope = await getOwnerScope(user);
   const connectionAccessIds = await allowedConnectionIds(user);
   const sendConnectionAccessIds = await allowedConnectionIds(user, "send");
   const canReadConversations = hasModulePermission(user, "conversations.read");
@@ -19,7 +20,7 @@ export default async function ConversationsPage({ searchParams }: { searchParams
   // contatos atribuídos a ele(a) — evita que um atendente leia a conversa
   // de um lead de outro atendente. A regra é aplicada na consulta.
   const [page, team, templates, pipelines, connections, tags] = await Promise.all([
-    canReadConversations ? getConversationsPage(user.organizationId, { restrictToOwnerId: hasModulePermission(user, "conversations.manage") ? undefined : user.id, allowedConnectionIds: connectionAccessIds ?? undefined }) : Promise.resolve({ items: [], nextCursor: null, total: 0 }),
+    canReadConversations ? getConversationsPage(user.organizationId, { ownerScope, allowedConnectionIds: connectionAccessIds ?? undefined }) : Promise.resolve({ items: [], nextCursor: null, total: 0 }),
     getTeamMembers(user.organizationId),
     getMessageTemplates(user.organizationId),
     getPipelines(user.organizationId).then((items) => pipelineIds ? items.filter((item) => pipelineIds.includes(item.id)) : items),
@@ -27,7 +28,7 @@ export default async function ConversationsPage({ searchParams }: { searchParams
     listTags(user.organizationId, "contact"),
   ]);
   if (conversation && canReadConversations) {
-    const requested = await getConversationsPage(user.organizationId, { conversationId: conversation.slice(0, 100), restrictToOwnerId: hasModulePermission(user, "conversations.manage") ? undefined : user.id, allowedConnectionIds: connectionAccessIds ?? undefined });
+    const requested = await getConversationsPage(user.organizationId, { conversationId: conversation.slice(0, 100), ownerScope, allowedConnectionIds: connectionAccessIds ?? undefined });
     if (requested.items[0]) page.items = [requested.items[0], ...page.items.filter((item) => item.id !== conversation)];
   }
 
@@ -35,7 +36,7 @@ export default async function ConversationsPage({ searchParams }: { searchParams
   // servidor; o resto é carregado sob demanda.
   const firstId = page.items[0]?.id;
   const [firstThread, firstSendOptions] = await Promise.all([
-    firstId ? getConversationMessagesPage(user.organizationId, { id: user.id, role: hasModulePermission(user, "conversations.manage") ? "ADMIN" : user.role }, firstId) : Promise.resolve(null),
+    firstId ? getConversationMessagesPage(user.organizationId, { id: user.id, role: user.role, ownerScope }, firstId) : Promise.resolve(null),
     firstId
       ? getSendOptions(user.organizationId, page.items[0]!.contact.id).then((options) => options.filter((option) =>
         (sendConnectionAccessIds === null || sendConnectionAccessIds.includes(option.connectionId)) &&

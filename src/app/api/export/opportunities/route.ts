@@ -3,7 +3,7 @@ import { getTeamMembers, getPipelines } from "@/lib/data";
 import { prisma } from "@/lib/prisma";
 import { csvDownload } from "@/lib/export";
 import { audit, actorOf } from "@/lib/audit";
-import { allowedPipelineIds, hasModulePermission } from "@/lib/access";
+import { allowedPipelineIds, getOwnerScope, hasModulePermission, scopeWhere } from "@/lib/access";
 
 const BATCH = 1000;
 
@@ -23,6 +23,7 @@ export async function GET() {
   }
   const { organizationId } = user;
   const permittedPipelineIds = await allowedPipelineIds(user);
+  const owners = await getOwnerScope(user);
   const [team, allPipelines] = await Promise.all([getTeamMembers(organizationId), getPipelines(organizationId)]);
   const pipelines = permittedPipelineIds === null ? allPipelines : allPipelines.filter((pipeline) => permittedPipelineIds.includes(pipeline.id));
 
@@ -37,7 +38,7 @@ export async function GET() {
   return csvDownload("oportunidades.csv", columns, async (cursor) => {
     // O contato vem junto na mesma consulta (JOIN), sem carregar a base de contatos.
     const rows = await prisma.opportunity.findMany({
-      where: { organizationId, ...(permittedPipelineIds === null ? {} : { pipelineId: { in: permittedPipelineIds } }) },
+      where: { organizationId, ...(permittedPipelineIds === null ? {} : { pipelineId: { in: permittedPipelineIds } }), ...(owners ? { AND: [scopeWhere(owners)] } : {}) },
       include: { contact: { select: { name: true, email: true, phone: true } } },
       orderBy: { id: "asc" },
       take: BATCH + 1,

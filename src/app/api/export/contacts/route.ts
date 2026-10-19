@@ -3,7 +3,7 @@ import { getTeamMembers } from "@/lib/data";
 import { prisma } from "@/lib/prisma";
 import { csvDownload } from "@/lib/export";
 import { audit, actorOf } from "@/lib/audit";
-import { hasModulePermission } from "@/lib/access";
+import { getOwnerScope, hasModulePermission, scopeWhere } from "@/lib/access";
 
 const BATCH = 1000;
 
@@ -23,6 +23,7 @@ export async function GET() {
   }
   const { organizationId } = user;
   const team = await getTeamMembers(organizationId);
+  const owners = await getOwnerScope(user);
   const ownerName = (id: string | null) => (id ? team.find((m) => m.id === id)?.name ?? "" : "");
 
   // Exportar dados de clientes/pacientes fica registrado (LGPD).
@@ -30,7 +31,7 @@ export async function GET() {
 
   return csvDownload("contatos.csv", ["name", "company", "email", "phone", "tags", "notes", "owner", "source", "score", "marketing_opt_out"], async (cursor) => {
     const rows = await prisma.contact.findMany({
-      where: { organizationId },
+      where: { organizationId, ...(owners ? { AND: [scopeWhere(owners)] } : {}) },
       orderBy: { id: "asc" },
       take: BATCH + 1,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),

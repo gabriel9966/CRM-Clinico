@@ -275,6 +275,8 @@ export async function getTeamMembers(organizationId: string): Promise<TeamMember
     role: u.role,
     permissions: (() => { try { const value = JSON.parse(u.permissions); return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []; } catch { return []; } })(),
     accessConfigured: u.accessConfigured,
+    dataScope: u.role === "ADMIN" ? "all" : u.dataScope,
+    seeUnassigned: u.seeUnassigned,
     pipelineAccesses: u.pipelineAccesses.map((access) => ({ pipelineId: access.pipelineId, canView: access.canView, canEdit: access.canEdit })),
     connectionAccesses: u.connectionAccesses.map((access) => ({ connectionId: access.connectionId, canView: access.canView, canSend: access.canSend })),
     isActive: u.isActive,

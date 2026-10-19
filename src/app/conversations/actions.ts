@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireOrgUser } from "@/lib/auth";
-import { canAccessConnection, hasModulePermission, type AccessUser } from "@/lib/access";
+import { canAccessConnection, getOwnerScope, hasModulePermission, ownerInScope, type AccessUser } from "@/lib/access";
 import { getSendOptions, sendContactMessage, type SendErrorCode } from "@/lib/messaging";
 import type { SendOptionDTO } from "@/lib/types";
 import { actorOf, audit } from "@/lib/audit";
@@ -17,7 +17,8 @@ export type SendOutcome =
 async function canTalkTo(user: AccessUser, contactId: string) {
   if (!hasModulePermission(user, "conversations.reply")) return false;
   const contact = await prisma.contact.findFirst({ where: { id: contactId, organizationId: user.organizationId }, select: { ownerId: true } });
-  return Boolean(contact && (hasModulePermission(user, "conversations.manage") || contact.ownerId === user.id));
+  // A carteira do usuário (só os dele / equipe / todos) decide com quem pode falar.
+  return Boolean(contact && ownerInScope(await getOwnerScope(user), contact.ownerId));
 }
 
 /** Used when starting a new conversation from a contact screen. */
@@ -52,7 +53,7 @@ async function getConversationForUser(user: AccessUser, conversationId: string) 
     where: { id: conversationId, organizationId: user.organizationId },
     select: { id: true, contactId: true, connectionId: true, ownerId: true, status: true },
   });
-  if (!conversation || (user.role !== "ADMIN" && conversation.ownerId !== user.id && !hasModulePermission(user, "conversations.manage"))) return null;
+  if (!conversation || !ownerInScope(await getOwnerScope(user), conversation.ownerId)) return null;
   if (conversation.connectionId && !(await canAccessConnection(user, conversation.connectionId))) return null;
   return conversation;
 }

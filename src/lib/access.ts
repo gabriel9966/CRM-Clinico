@@ -2,6 +2,9 @@ import "server-only";
 
 import { prisma } from "@/lib/prisma";
 import { MODULE_PERMISSIONS, type ModulePermission } from "@/lib/access-policy";
+import { AppError } from "@/lib/errors";
+import { isDataScope, ownerInScope, type OwnerScope } from "@/lib/access-scope";
+export { scopeWhere, ownerInScope, type OwnerScope } from "@/lib/access-scope";
 export { MODULE_PERMISSIONS, type ModulePermission } from "@/lib/access-policy";
 
 /** Permissões de módulo guardadas no usuário. A gestão de escopo (pipeline e
@@ -44,6 +47,31 @@ export async function allowedConnectionIds(user: AccessUser, mode: "view" | "sen
     select: { connectionId: true },
   });
   return rows.map((row) => row.connectionId);
+}
+
+/**
+ * Carteira visível ao usuário (contatos, negócios, conversas). null = todos.
+ * ADMIN e escopo "all" veem tudo; "team" = responsáveis da mesma equipe;
+ * "own" = só ele. seeUnassigned inclui os registros sem responsável (fila).
+ */
+export async function getOwnerScope(user: AccessUser & { dataScope?: string | null; seeUnassigned?: boolean | null; team?: string | null }): Promise<OwnerScope> {
+  if (user.role === "ADMIN") return null;
+  const scope = isDataScope(user.dataScope) ? user.dataScope : "own";
+  if (scope === "all") return null;
+  const includeUnassigned = user.seeUnassigned !== false;
+  if (scope === "team") {
+    const mates = await prisma.user.findMany({ where: { organizationId: user.organizationId, team: user.team ?? "Geral" }, select: { id: true } });
+    const ids = mates.map((m) => m.id);
+    return { ids: ids.includes(user.id) ? ids : [...ids, user.id], includeUnassigned };
+  }
+  return { ids: [user.id], includeUnassigned };
+}
+
+/** Lança AppError 403 se o registro (pelo responsável) estiver fora da carteira do usuário. */
+export async function assertOwnerInScope(user: Parameters<typeof getOwnerScope>[0], ownerId: string | null | undefined) {
+  if (!ownerInScope(await getOwnerScope(user), ownerId)) {
+    throw new AppError("fora_da_carteira", "Este registro pertence à carteira de outra pessoa.", 403);
+  }
 }
 
 export async function canAccessPipeline(user: AccessUser, pipelineId: string, mode: "view" | "edit" = "view") {

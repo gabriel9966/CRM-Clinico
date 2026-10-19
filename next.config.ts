@@ -10,7 +10,10 @@ const nextConfig: NextConfig = {
         { key: "Strict-Transport-Security", value: "max-age=31536000" },
         { key: "X-Content-Type-Options", value: "nosniff" },
         { key: "X-Frame-Options", value: "DENY" },
-        { key: "Referrer-Policy", value: "no-referrer" },
+        // "same-origin": não vaza a URL para sites externos. Não use "no-referrer":
+        // com ele o navegador envia `Origin: null` nos POSTs e o Next recusa
+        // todas as server actions (login e qualquer formulário quebram).
+        { key: "Referrer-Policy", value: "same-origin" },
         { key: "Permissions-Policy", value: "camera=(), geolocation=(), payment=()" },
         { key: "Content-Security-Policy", value: "frame-ancestors 'none'; base-uri 'self'; object-src 'none'" },
       ],
