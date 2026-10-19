@@ -23,6 +23,7 @@ import { addPrivateNote, assignConversation, fetchConversationEvents, fetchConve
 import { fetchContactDetail, fetchConversationThread, fetchConversations } from "@/app/listings/actions";
 import { createMessageTemplate, deleteMessageTemplate } from "@/app/templates/actions";
 import { createActivity, type ActivityInput } from "@/app/activities/actions";
+import { pauseAiAction, resumeAiAction } from "@/app/ai/actions";
 import { createOpportunity } from "@/app/pipeline/actions";
 
 const PROVIDER_LABEL: Record<NonNullable<ConversationChannelInfo>["provider"], string> = {
@@ -71,6 +72,7 @@ function mergeMessages(current: MessageDTO[], incoming: MessageDTO[]): MessageDT
 }
 
 export function ConversationsView({
+  aiEnabled,
   initialPage,
   initialThread,
   initialSendOptions,
@@ -82,6 +84,8 @@ export function ConversationsView({
   connections,
   tags,
 }: {
+  /** A empresa tem ao menos um agente de IA ativo. */
+  aiEnabled: boolean;
   initialPage: Page<ConversationRowDTO>;
   /** Mensagens da primeira conversa, já carregadas pelo servidor. */
   initialThread: Page<MessageDTO> | null;
@@ -183,6 +187,14 @@ export function ConversationsView({
     if (!result.ok) { setSendError(result.error ?? "Não foi possível atribuir o atendimento."); return; }
     setRows((prev) => prev.map((row) => (row.id === activeRow.id ? { ...row, ownerId } : row)));
     setSelectedSnapshot((row) => row?.id === activeRow.id ? { ...row, ownerId } : row);
+    router.refresh();
+  }
+
+  async function toggleAi(paused: boolean) {
+    if (!activeRow) return;
+    await (paused ? pauseAiAction(activeRow.id) : resumeAiAction(activeRow.id));
+    setRows((prev) => prev.map((row) => row.id === activeRow.id ? { ...row, aiPaused: paused } : row));
+    setSelectedSnapshot((row) => row?.id === activeRow.id ? { ...row, aiPaused: paused } : row);
     router.refresh();
   }
 
@@ -582,64 +594,79 @@ export function ConversationsView({
                   <span className="avatar md" style={{ background: colorFor(activeContact.name) }}>
                     {initials(activeContact.name)}
                   </span>
-                  <div style={{ flex: 1 }}>
+                  <div className="thread-id">
                     <div className="hname">{activeContact.name}</div>
                     <div className="hsub">{activeContact.company || activeContact.email}</div>
                   </div>
-                  <div className="conversation-head-meta">
-                    <div className="conversation-channel-summary">
-                      <span>CANAL DA CONVERSA</span>
-                      <ChannelBadge channel={activeChannel} />
-                      {activeChannel ? (
-                        <small>{`Instância/conexão: ${activeChannel.label}`}</small>
-                      ) : (
-                        <>
-                        <div className="conversation-channel-picker">
-                        <label>
-                          <small>Selecione a instância que deve atender este histórico:</small>
-                          <select value="" disabled={linkingChannel || usableChannels.length === 0} onChange={(event) => chooseConversationChannel(event.target.value)} aria-label="Selecionar instancia para o atendimento">
-                            <option value="">{linkingChannel ? "Vinculando canal..." : "Selecionar canal/instância"}</option>
-                            {usableChannels.map((option) => <option key={option.connectionId} value={option.connectionId}>{PROVIDER_LABEL[option.provider]} · {option.label}{option.existing ? "" : " (iniciar conversa)"}</option>)}
-                          </select>
-                        </label>
-                        {usableChannels.length === 0 && (
-                          <div className="conversation-instance-empty">
-                            <small>{instanceSetupMessage}</small>
-                            {currentUserRole === "ADMIN" ? <button type="button" className="btn small ghost" onClick={() => router.push("/connections")}>Conectar instancia</button> : <small>Peca acesso a uma instancia conectada a um administrador.</small>}
-                          </div>
-                        )}
-                        </div>
-                        <small>Sem instância elegível. Conecte um canal ou cadastre telefone/e-mail no contato.</small>
-                        </>
-                      )}
-                      {activeChannel?.provider === "WHATSAPP_CLOUD" && <small className={cloudWindowOpen ? "conversation-window-open" : "conversation-window-closed"}>{cloudWindowOpen ? `Janela 24h aberta até ${new Date(cloudWindowEnds!).toLocaleString("pt-BR")}` : "Janela 24h encerrada · somente template aprovado"}</small>}
-                    </div>
-                    {currentUserRole === "ADMIN" ? (
-                      <label className="conversation-assignment">
-                        <span>ATENDENTE</span>
-                        <div>
-                          <span className="avatar" style={{ background: activeOwner?.color ?? "#94a3b8" }}>{activeOwner ? initials(activeOwner.name) : "?"}</span>
-                          <select value={activeRow?.ownerId ?? ""} onChange={(event) => changeAssignee(event.target.value || null, activeRow?.ownerId ? "transfer" : "assign")} aria-label="Definir atendente da conversa">
-                            <option value="">Sem atendente</option>
-                            {team.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
-                          </select>
-                        </div>
-                      </label>
-                    ) : (
-                      <div className="conversation-assignment readonly"><span>ATENDENTE</span><div><span className="avatar" style={{ background: activeOwner?.color ?? "#94a3b8" }}>{activeOwner ? initials(activeOwner.name) : "?"}</span><strong>{activeOwner?.name ?? "Sem atendente"}</strong></div></div>
-                    )}
-                  </div>
                   <div className="conversation-actions">
+                    {activeRow?.ownerId !== currentUserId && <button type="button" className="btn small" onClick={() => changeAssignee(null, "claim")}>Assumir</button>}
+                    <button type="button" className="btn small" onClick={openCustomerPanel}>Ficha</button>
                     {activeRow?.status === "OPEN" ? (
                       <button type="button" className="btn small" onClick={() => changeStatus("CLOSED")}>Finalizar</button>
                     ) : (
                       <button type="button" className="btn small primary" onClick={() => changeStatus("OPEN")}>Reabrir</button>
                     )}
-                    {activeRow?.ownerId !== currentUserId && <button type="button" className="btn small" onClick={() => changeAssignee(null, "claim")}>Assumir</button>}
-                    <button type="button" className="btn small" onClick={openCustomerPanel}>Ficha</button>
                   </div>
                 </div>
-                <div className="thread-body" ref={bodyRef}>
+                <div className="thread-meta">
+                  {aiEnabled && (
+                    <div className="meta-item">
+                      <span className="meta-label">IA</span>
+                      {activeRow?.aiPaused ? (
+                        <>
+                          <span className="meta-window closed">Pausada · atendimento humano</span>
+                          <button type="button" className="btn small" onClick={() => toggleAi(false)}>Retomar IA</button>
+                        </>
+                      ) : (
+                        <>
+                          <span className="meta-window open">Ativa nesta conversa</span>
+                          <button type="button" className="btn small ghost" onClick={() => toggleAi(true)}>Pausar</button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                  <div className="meta-item">
+                    <span className="meta-label">Canal</span>
+                    <ChannelBadge channel={activeChannel} />
+                    {activeChannel?.provider === "WHATSAPP_CLOUD" && (
+                      <span className={`meta-window ${cloudWindowOpen ? "open" : "closed"}`}>
+                        {cloudWindowOpen ? `Janela 24h até ${new Date(cloudWindowEnds!).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}` : "Janela 24h encerrada · só template aprovado"}
+                      </span>
+                    )}
+                  </div>
+                  <div className="meta-item">
+                    <span className="meta-label">Atendente</span>
+                    <span className="avatar" style={{ background: activeOwner?.color ?? "#94a3b8" }}>{activeOwner ? initials(activeOwner.name) : "?"}</span>
+                    {currentUserRole === "ADMIN" ? (
+                      <select value={activeRow?.ownerId ?? ""} onChange={(event) => changeAssignee(event.target.value || null, activeRow?.ownerId ? "transfer" : "assign")} aria-label="Definir atendente da conversa">
+                        <option value="">Sem atendente</option>
+                        {team.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
+                      </select>
+                    ) : (
+                      <strong>{activeOwner?.name ?? "Sem atendente"}</strong>
+                    )}
+                  </div>
+                </div>
+                {!activeChannel && (
+                  <div className="thread-notice" role="status">
+                    {usableChannels.length > 0 ? (
+                      <>
+                        <span>Esta conversa ainda não tem canal. Escolha por onde atender:</span>
+                        <select value="" disabled={linkingChannel} onChange={(event) => chooseConversationChannel(event.target.value)} aria-label="Selecionar instância para o atendimento">
+                          <option value="">{linkingChannel ? "Vinculando canal..." : "Selecionar canal/instância"}</option>
+                          {usableChannels.map((option) => <option key={option.connectionId} value={option.connectionId}>{PROVIDER_LABEL[option.provider]} · {option.label}{option.existing ? "" : " (iniciar conversa)"}</option>)}
+                        </select>
+                      </>
+                    ) : (
+                      <>
+                        <span><strong>{instanceSetupMessage}</strong> {noChannelReason}</span>
+                        {currentUserRole === "ADMIN"
+                          ? <button type="button" className="btn small" onClick={() => router.push("/connections")}>Conectar instância</button>
+                          : <span className="muted">Peça a um administrador para conectar uma instância.</span>}
+                      </>
+                    )}
+                  </div>
+                )}                <div className="thread-body" ref={bodyRef}>
                   {olderCursor && (
                     <div style={{ textAlign: "center", marginBottom: 8 }}>
                       <button className="btn small ghost" onClick={loadOlder} disabled={loadingOlder}>
@@ -671,14 +698,11 @@ export function ConversationsView({
                     ))
                   )}
                 </div>
-                {usableChannels.length === 0 || activeRow?.status === "CLOSED" || cloudWindowClosed ? (
-                  <div
-                    role="alert"
-                    style={{ padding: "10px 16px", fontSize: 12, fontWeight: 600, color: "var(--orange)", background: "var(--orange-soft, #fff7ed)", borderTop: "1px solid var(--border-soft)" }}
-                  >
+                {(usableChannels.length === 0 && activeChannel) || activeRow?.status === "CLOSED" || cloudWindowClosed ? (
+                  <div role="alert" className="thread-notice">
                     {activeRow?.status === "CLOSED" ? "Este atendimento foi finalizado. Reabra-o para enviar uma nova mensagem." : cloudWindowClosed ? "Janela de 24h encerrada para esta instância oficial. Texto livre bloqueado; para retomar, envie um template aprovado pela Meta. Os 'Modelos' locais não são templates oficiais." : noChannelReason}
                   </div>
-                ) : (
+                ) : usableChannels.length === 0 ? null : (
                   <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 16px 0", fontSize: 12 }}>
                     <span className="muted">Enviar por:</span>
                     {usableChannels.length > 1 ? (

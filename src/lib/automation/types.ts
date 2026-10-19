@@ -1,4 +1,4 @@
-export type ActionType = "send_message" | "create_task" | "move_stage" | "add_tag" | "assign_owner" | "webhook" | "create_contact" | "create_opportunity";
+export type ActionType = "send_message" | "create_task" | "move_stage" | "add_tag" | "assign_owner" | "webhook" | "create_contact" | "create_opportunity" | "ai_agent";
 
 export type NodeData =
   | { kind: "trigger"; label: string }
@@ -32,6 +32,7 @@ export const ACTION_LABEL: Record<ActionType, string> = {
   webhook: "Chamar webhook",
   create_contact: "Criar contato",
   create_opportunity: "Criar oportunidade",
+  ai_agent: "Agente de IA (chatbot)",
 };
 
 export const TRIGGER_LABEL: Record<string, string> = {

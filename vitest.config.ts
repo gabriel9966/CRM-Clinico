@@ -11,6 +11,9 @@ export default defineConfig({
   test: {
     environment: "node",
     globals: true,
+    // Suítes de integração importam muitos módulos; em máquina carregada o beforeAll passa de 10s.
+    hookTimeout: 60_000,
+    testTimeout: 30_000,
     setupFiles: ["./test/setup.ts"],
     env: {
       CONNECTIONS_SECRET: "test-connections-secret-not-for-production-use",

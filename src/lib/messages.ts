@@ -67,6 +67,14 @@ export async function createMessage(db: DbClient, data: Prisma.MessageUncheckedC
       ...(message.direction === "in" ? { status: "OPEN", closedAt: null } : {}),
     },
   });
+  // Um atendente respondeu pelo CRM: o agente de IA sai da conversa até alguém
+  // clicar em "Retomar IA" (evita bot e humano falando ao mesmo tempo).
+  if (message.direction === "out" && message.senderId) {
+    await db.conversation.updateMany({
+      where: { id: conversationId, organizationId: message.organizationId, aiPausedAt: null },
+      data: { aiPausedAt: message.time },
+    });
+  }
   return message;
 }
 

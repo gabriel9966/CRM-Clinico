@@ -30,6 +30,7 @@ model Organization {
   users         User[]
   pipelines     Pipeline[]
   taskLists     TaskList[]
+  aiAgents      AiAgent[]
   contacts      Contact[]
   opportunities Opportunity[]
   messages      Message[]
@@ -604,6 +605,10 @@ model Conversation {
   lastMessageText      String?
   lastMessageDirection String?
 
+  // Preenchido quando o atendimento passou para um humano (a IA pediu ajuda ou
+  // alguém respondeu pelo CRM): enquanto houver data, o agente de IA não responde.
+  aiPausedAt DateTime?
+
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
@@ -1056,4 +1061,58 @@ model Segment {
   campaigns Campaign[]
 
   @@index([organizationId])
+}
+
+// Agente de IA (chatbot) da empresa. A chave de API é da PRÓPRIA empresa e fica
+// criptografada (nunca volta para o navegador). O agente é usado pela ação
+// "Agente de IA" das automações; as ferramentas liberadas em `tools` são as
+// únicas que ele pode chamar, sempre limitadas ao contato da conversa.
+model AiAgent {
+  id           String   @id @default(cuid())
+  name         String
+  enabled      Boolean  @default(true)
+  model        String   @default("claude-opus-5-5")
+  effort       String   @default("medium")
+  systemPrompt String   @default("")
+  apiKey       String   // encryptJson(chave)
+  apiKeyHint   String   @default("") // últimos 4 caracteres, só para exibir
+  tools        String   @default("[]") // JSON: nomes das ferramentas liberadas
+  maxToolSteps Int      @default(6)
+  historyLimit Int      @default(20)
+  // Freios de custo/segurança
+  replyLimitPerHour Int @default(20) // respostas por contato por hora
+  dailyTokenLimit   Int @default(0)  // 0 = sem limite
+  handoffMessage    String @default("Vou chamar um atendente para continuar com você. Já já alguém responde por aqui.")
+  lastError         String?
+  lastErrorAt       DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  usages AiUsage[]
+
+  @@index([organizationId])
+}
+
+// Uma linha por execução do agente: custo (tokens), desfecho e limites por hora.
+model AiUsage {
+  id           String   @id @default(cuid())
+  outcome      String   // replied | handoff | skipped | error | test
+  steps        Int      @default(0)
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  cacheReadTokens Int   @default(0)
+  detail       String?
+  createdAt    DateTime @default(now())
+
+  organizationId String
+  agentId        String
+  agent          AiAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  contactId      String?
+
+  @@index([organizationId, createdAt])
+  @@index([agentId, createdAt])
+  @@index([contactId, createdAt])
 }

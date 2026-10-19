@@ -40,6 +40,7 @@ const PALETTE: PaletteItem[] = [
   { kind: "action", actionType: "webhook", label: ACTION_LABEL.webhook },
   { kind: "action", actionType: "create_contact", label: ACTION_LABEL.create_contact },
   { kind: "action", actionType: "create_opportunity", label: ACTION_LABEL.create_opportunity },
+  { kind: "action", actionType: "ai_agent", label: ACTION_LABEL.ai_agent },
   { kind: "condition", label: "Condição" },
   { kind: "delay", label: "Espera" },
   { kind: "code", label: "Código JS" },
@@ -69,7 +70,9 @@ function defaultDataFor(item: PaletteItem): NodeData {
                   ? { name: "{{payload.name}}", email: "{{payload.email}}", phone: "{{payload.phone}}", company: "{{payload.company}}" }
                   : item.actionType === "create_opportunity"
                     ? { title: "Nova oportunidade", pipelineId: "", stageId: "", value: 0 }
-                    : { url: "" };
+                    : item.actionType === "ai_agent"
+                      ? { agentId: "" }
+                      : { url: "" };
     return { kind: "action", actionType: item.actionType, config };
   }
   if (item.kind === "condition") {
@@ -95,6 +98,7 @@ export function FlowEditor({
   team,
   professionals,
   procedures,
+  agents,
   webhookPath,
 }: {
   automation: AutomationDTO;
@@ -102,12 +106,14 @@ export function FlowEditor({
   team: TeamMemberDTO[];
   professionals: { id: string; name: string }[];
   procedures: { id: string; name: string }[];
+  /** Agentes de IA da empresa (ação “Agente de IA”). */
+  agents: { id: string; name: string; enabled: boolean }[];
   /** Caminho do webhook já com o token (ex.: /api/webhooks/automation/ID?token=...). */
   webhookPath: string;
 }) {
   return (
     <ReactFlowProvider>
-      <Editor automation={automation} pipelines={pipelines} team={team} professionals={professionals} procedures={procedures} webhookPath={webhookPath} />
+      <Editor automation={automation} pipelines={pipelines} team={team} professionals={professionals} procedures={procedures} agents={agents} webhookPath={webhookPath} />
     </ReactFlowProvider>
   );
 }
@@ -118,6 +124,7 @@ function Editor({
   team,
   professionals,
   procedures,
+  agents,
   webhookPath,
 }: {
   automation: AutomationDTO;
@@ -125,6 +132,7 @@ function Editor({
   team: TeamMemberDTO[];
   professionals: { id: string; name: string }[];
   procedures: { id: string; name: string }[];
+  agents: { id: string; name: string; enabled: boolean }[];
   webhookPath: string;
 }) {
   const router = useRouter();
@@ -366,6 +374,7 @@ function Editor({
               node={selectedNode}
               pipelines={pipelines}
               team={team}
+              agents={agents}
               onChangeData={updateSelectedData}
               onChangeConfig={updateSelectedConfig}
             />
@@ -563,12 +572,14 @@ function NodeInspector({
   node,
   pipelines,
   team,
+  agents,
   onChangeData,
   onChangeConfig,
 }: {
   node: Node;
   pipelines: PipelineDTO[];
   team: TeamMemberDTO[];
+  agents: { id: string; name: string; enabled: boolean }[];
   onChangeData: (patch: Record<string, unknown>) => void;
   onChangeConfig: (patch: Record<string, unknown>) => void;
 }) {
@@ -644,6 +655,20 @@ function NodeInspector({
                 <option value="opportunity">Oportunidade</option>
               </select>
             </div>
+          </>
+        )}
+
+        {data.actionType === "ai_agent" && (
+          <>
+            <div className="field">
+              <label>Agente de IA</label>
+              <select value={String(config.agentId ?? "")} onChange={(e) => onChangeConfig({ agentId: e.target.value })}>
+                <option value="">Selecione...</option>
+                {agents.map((a) => <option key={a.id} value={a.id}>{a.name}{a.enabled ? "" : " (pausado)"}</option>)}
+              </select>
+            </div>
+            <p className="field-help">O agente lê a conversa e responde pelo mesmo canal. Use com o gatilho “Mensagem recebida” e coloque esta etapa por último. Se o assunto for delicado ou a IA falhar, ele passa para a equipe e se pausa naquela conversa.</p>
+            {agents.length === 0 && <p className="field-help">Nenhum agente criado ainda: crie em “Agentes de IA”, no menu.</p>}
           </>
         )}
 

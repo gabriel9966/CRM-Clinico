@@ -30,6 +30,8 @@ export type ConversationRowDTO = {
   status: "OPEN" | "CLOSED";
   ownerId: string | null;
   channel: ConversationChannelInfo;
+  /** O agente de IA está pausado nesta conversa (atendimento humano). */
+  aiPaused: boolean;
 };
 
 export type StageDTO = {

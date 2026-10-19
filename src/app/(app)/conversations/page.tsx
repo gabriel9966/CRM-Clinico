@@ -4,6 +4,7 @@ import { getConversationMessagesPage, getConversationsPage } from "@/lib/queries
 import { requireOrgUser } from "@/lib/auth";
 import { allowedConnectionIds, hasModulePermission } from "@/lib/access";
 import { getSendOptions } from "@/lib/messaging";
+import { listAiAgentOptions } from "@/lib/ai/queries";
 import { ConversationsView } from "@/components/conversations/ConversationsView";
 
 export default async function ConversationsPage() {
@@ -37,8 +38,11 @@ export default async function ConversationsPage() {
       : Promise.resolve([]),
   ]);
 
+  const aiEnabled = (await listAiAgentOptions(user.organizationId)).some((agent) => agent.enabled);
+
   return (
     <ConversationsView
+      aiEnabled={aiEnabled}
       initialPage={page}
       initialThread={firstThread}
       initialSendOptions={firstSendOptions}

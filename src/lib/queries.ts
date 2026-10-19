@@ -324,6 +324,7 @@ export async function getConversationsPage(organizationId: string, query: Conver
       lastInboundAt: lastInboundByConversation.get(conversation.id) ?? null,
       status: conversation.status,
       ownerId: conversation.ownerId,
+      aiPaused: !!conversation.aiPausedAt,
       channel: conversation.connection
         ? { provider: conversation.connection.provider as "WHATSAPP_EVOLUTION" | "WHATSAPP_AZAP" | "WHATSAPP_CLOUD" | "INSTAGRAM" | "EMAIL", label: conversation.connection.label, externalName: null, connectionId: conversation.connection.id }
         : null,

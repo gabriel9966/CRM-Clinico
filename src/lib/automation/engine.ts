@@ -190,6 +190,14 @@ async function runActionNode(node: Extract<NodeData, { kind: "action" }>, ctx: R
       ctx.opportunityId = created.id;
       return { ok: true, opportunityId: created.id };
     }
+    case "ai_agent": {
+      if (!ctx.contactId) return { ok: false, reason: "o agente de IA precisa de um contato (use o gatilho “Mensagem recebida”)" };
+      if (!config.agentId) return { ok: false, reason: "selecione o agente de IA" };
+      const { respondWithAgent } = await import("@/lib/ai/agent");
+      const outcome = await respondWithAgent({ organizationId: orgId, contactId: ctx.contactId, agentId: String(config.agentId) });
+      // "pulado" (IA pausada, atendente assumiu…) é um desfecho normal, não falha.
+      return outcome.status === "error" ? { ok: false, reason: outcome.reason ?? "falha do agente de IA" } : { ok: true, ...outcome };
+    }
     default:
       return { ok: false, reason: "ação desconhecida" };
   }
@@ -387,14 +395,23 @@ export async function triggerAutomations(
       throw error;
     }
 
-    await executeWithFailureTracking(flow, run.id, firstEdge.target, {
+    const execution = executeWithFailureTracking(flow, run.id, firstEdge.target, {
       organizationId,
       contactId: ctx.contactId,
       opportunityId: ctx.opportunityId,
       appointmentId: ctx.appointmentId,
       payload: ctx.payload,
     });
+    // O agente de IA demora (segundos): roda em segundo plano para o webhook do
+    // canal responder na hora (senão o provedor reenvia o evento por timeout).
+    // O fim (ou a falha) da execução é registrado no histórico da automação.
+    if (flowHasAiAgent(flow)) void execution;
+    else await execution;
   }
+}
+
+function flowHasAiAgent(flow: Flow) {
+  return flow.nodes.some((n) => n.data.kind === "action" && n.data.actionType === "ai_agent");
 }
 
 /** Porta única dos eventos da agenda. O payload chega completo ao fluxo como
