@@ -23,8 +23,8 @@ export async function createTeamMember(
   if (!name || !email || !password) {
     return { error: "Preencha nome, e-mail e senha." };
   }
-  if (password.length < 6) {
-    return { error: "A senha precisa ter pelo menos 6 caracteres." };
+  if (password.length < 12 || Buffer.byteLength(password, "utf8") > 72) {
+    return { error: "Use uma senha de pelo menos 12 caracteres e até 72 bytes." };
   }
 
   const existing = await prisma.user.findUnique({ where: { email } });
@@ -32,7 +32,7 @@ export async function createTeamMember(
     return { error: "Já existe um usuário com esse e-mail." };
   }
 
-  const passwordHash = await bcrypt.hash(password, 10);
+  const passwordHash = await bcrypt.hash(password, 12);
   // Contas novas nunca herdam o acesso amplo do comportamento legado. O
   // administrador precisa liberar módulos, pipelines e instâncias na matriz.
   await prisma.user.create({ data: { name, email, passwordHash, color, team, organizationId, accessConfigured: true, permissions: "[]" } });

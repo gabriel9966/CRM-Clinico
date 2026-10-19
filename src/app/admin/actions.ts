@@ -39,8 +39,8 @@ export async function createOrganization(
   if (!orgName || !adminName || !adminEmail || !adminPassword) {
     return { error: "Preencha todos os campos." };
   }
-  if (adminPassword.length < 6) {
-    return { error: "A senha precisa ter pelo menos 6 caracteres." };
+  if (adminPassword.length < 12 || Buffer.byteLength(adminPassword, "utf8") > 72) {
+    return { error: "Use uma senha de pelo menos 12 caracteres e até 72 bytes." };
   }
 
   const existingUser = await prisma.user.findUnique({ where: { email: adminEmail } });
@@ -55,7 +55,7 @@ export async function createOrganization(
     slug = `${slugify(orgName)}-${suffix}`;
   }
 
-  const passwordHash = await bcrypt.hash(adminPassword, 10);
+  const passwordHash = await bcrypt.hash(adminPassword, 12);
 
   await prisma.organization.create({
     data: {

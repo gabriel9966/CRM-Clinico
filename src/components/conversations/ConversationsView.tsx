@@ -507,9 +507,9 @@ export function ConversationsView({
               : "Suas conversas atribuídas — colegas não aparecem aqui"}
           </div>
         </div>
+        <button type="button" className="btn primary" onClick={() => setNewConversationOpen(true)}><Icon.plus /> Novo atendimento</button>
       </div>
       <div className="content">
-        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}><button type="button" className="btn primary" onClick={() => setNewConversationOpen(true)}><Icon.plus /> Novo atendimento</button></div>
         {newConversationOpen && <NewConversationDialog connections={connections} onClose={() => setNewConversationOpen(false)} />}
         <div className="convo-layout">
           <div className="convo-list">

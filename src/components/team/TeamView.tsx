@@ -192,7 +192,7 @@ export function TeamView({
                   </div>
                   <div className="field">
                     <label>Senha provisória *</label>
-                    <input name="password" type="password" required placeholder="mínimo 6 caracteres" />
+                    <input name="password" type="password" required minLength={12} maxLength={72} placeholder="mínimo 12 caracteres" />
                   </div>
                   <div className="field">
                     <label>Cor do avatar</label>

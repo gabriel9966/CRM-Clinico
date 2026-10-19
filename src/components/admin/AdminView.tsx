@@ -133,7 +133,7 @@ export function AdminView({ organizations }: { organizations: OrganizationWithSt
                 </div>
                 <div className="field">
                   <label>Senha provisória *</label>
-                  <input name="adminPassword" type="password" required placeholder="mínimo 6 caracteres" />
+                  <input name="adminPassword" type="password" required minLength={12} maxLength={72} placeholder="mínimo 12 caracteres" />
                 </div>
                 {state.error && <p style={{ color: "var(--red)", fontSize: 13, fontWeight: 600 }}>{state.error}</p>}
               </div>
