@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { encryptJson } from "@/lib/crypto";
 import { readSession } from "@/lib/session";
 import { appUrl } from "@/lib/app-url";
-import { exchangeCodeForTokens, GOOGLE_STATE_COOKIE } from "@/lib/providers/google-calendar";
+import { exchangeCodeForTokens, GOOGLE_STATE_COOKIE, GOOGLE_TIMEOUT_MS } from "@/lib/providers/google-calendar";
 
 function sameState(a: string | null | undefined, b: string | null | undefined) {
   if (!a || !b) return false;
@@ -44,6 +44,7 @@ export async function GET(req: NextRequest) {
     let email: string | null = null;
     try {
       const me = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+        signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
         headers: { Authorization: `Bearer ${tokens.access_token}` },
       }).then((r) => r.json());
       email = me.email ?? null;

@@ -190,7 +190,7 @@ export async function createInstagramConnection(
   try {
     const res = await fetch(
       `https://graph.facebook.com/v19.0/${igUserId}?fields=id,username&access_token=${encodeURIComponent(accessToken)}`,
-      { cache: "no-store" }
+      { cache: "no-store", signal: AbortSignal.timeout(15_000) }
     );
     const json = await res.json();
     if (!res.ok) {

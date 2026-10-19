@@ -12,6 +12,8 @@ const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const CALENDAR_API = "https://www.googleapis.com/calendar/v3";
 const SCOPE = "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email";
 export const GOOGLE_STATE_COOKIE = "google_oauth_state";
+// Google lento ou fora do ar não pode prender a tela nem a ação do usuário.
+export const GOOGLE_TIMEOUT_MS = 10_000;
 
 function redirectUri() {
   const base = (process.env.APP_BASE_URL || "http://localhost:3000").replace(/\/+$/, "");
@@ -33,6 +35,7 @@ export function buildAuthUrl(state: string) {
 
 export async function exchangeCodeForTokens(code: string) {
   const res = await fetch(TOKEN_URL, {
+    signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -50,6 +53,7 @@ export async function exchangeCodeForTokens(code: string) {
 
 async function refreshAccessToken(refreshToken: string) {
   const res = await fetch(TOKEN_URL, {
+    signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -105,6 +109,7 @@ export async function createCalendarEvent(userId: string, input: CalendarEventIn
   const calendarId = account?.calendarId || "primary";
 
   const res = await fetch(`${CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events`, {
+    signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -127,6 +132,7 @@ export async function updateCalendarEvent(userId: string, eventId: string, input
   const calendarId = account?.calendarId || "primary";
 
   await fetch(`${CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events/${eventId}`, {
+    signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
     method: "PATCH",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -163,6 +169,7 @@ export async function listCalendarEvents(userId: string, from: Date, to: Date): 
     maxResults: "500",
   });
   const res = await fetch(`${CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events?${params}`, {
+    signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
     headers: { Authorization: `Bearer ${token}` },
     cache: "no-store",
   });
@@ -187,6 +194,7 @@ export async function deleteCalendarEvent(userId: string, eventId: string) {
   const calendarId = account?.calendarId || "primary";
 
   await fetch(`${CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events/${eventId}`, {
+    signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
     method: "DELETE",
     headers: { Authorization: `Bearer ${token}` },
   }).catch(() => {});

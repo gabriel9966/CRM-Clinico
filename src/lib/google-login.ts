@@ -9,6 +9,7 @@ const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo";
 
 export const GOOGLE_LOGIN_STATE_COOKIE = "google_login_state";
+const GOOGLE_TIMEOUT_MS = 10_000;
 
 function redirectUri() {
   const base = (process.env.APP_BASE_URL || "http://localhost:3000").replace(/\/+$/, "");
@@ -30,6 +31,7 @@ export function buildLoginUrl(state: string) {
 // Troca o código e devolve o e-mail verificado da conta Google (ou null).
 export async function verifiedEmailFromCode(code: string): Promise<string | null> {
   const res = await fetch(TOKEN_URL, {
+    signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -44,7 +46,7 @@ export async function verifiedEmailFromCode(code: string): Promise<string | null
   const { access_token } = (await res.json()) as { access_token?: string };
   if (!access_token) return null;
 
-  const me = await fetch(USERINFO_URL, { headers: { Authorization: `Bearer ${access_token}` } });
+  const me = await fetch(USERINFO_URL, { headers: { Authorization: `Bearer ${access_token}` }, signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS) });
   if (!me.ok) return null;
   const info = (await me.json()) as { email?: string; email_verified?: boolean };
   if (!info.email || info.email_verified !== true) return null;
