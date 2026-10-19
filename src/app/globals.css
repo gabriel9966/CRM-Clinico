@@ -113,14 +113,25 @@ input[type=checkbox], input[type=radio]{accent-color:var(--primary);}
 /* ---------- Sidebar ---------- */
 .sidebar{
   width:244px; background:var(--sidebar-bg); color:var(--sidebar-text);
-  display:flex; flex-direction:column; flex-shrink:0; padding:20px 13px;
+  display:flex; flex-direction:column; flex-shrink:0; padding:16px 13px;
   border-right:1px solid #183958; overflow:hidden; min-width:0;
   transition:width .24s var(--ease),padding .24s var(--ease);
 }
-.sidebar-nav{flex:1;min-width:0;min-height:0;overflow-y:auto;overflow-x:hidden;scrollbar-width:none;overscroll-behavior:contain;}
-.sidebar-nav::-webkit-scrollbar{display:none;}
+/* A barra de rolagem fica visível (fina): em telas baixas os últimos itens
+   de Configurações ficam abaixo da dobra e o usuário precisa saber que rola. */
+.sidebar-nav{flex:1;min-width:0;min-height:0;overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.24) transparent;overscroll-behavior:contain;}
+/* Sombra de rolagem: aparece no rodapé só quando há itens abaixo da dobra. */
+.sidebar-nav{
+  background:
+    linear-gradient(var(--sidebar-bg) 30%, transparent) top / 100% 24px no-repeat local,
+    linear-gradient(transparent, var(--sidebar-bg) 70%) bottom / 100% 24px no-repeat local,
+    linear-gradient(rgba(0,0,0,.35), transparent) top / 100% 10px no-repeat scroll,
+    linear-gradient(transparent, rgba(0,0,0,.45)) bottom / 100% 14px no-repeat scroll;
+}
+.sidebar-nav::-webkit-scrollbar{width:6px;}
+.sidebar-nav::-webkit-scrollbar-thumb{background:rgba(255,255,255,.24);border-radius:6px;border:0;}
 .brand{
-  display:flex; align-items:center; gap:11px; padding:8px 13px 22px;
+  display:flex; align-items:center; gap:11px; padding:6px 13px 16px;
   color:var(--sidebar-heading); font-family:var(--font-poppins),sans-serif; font-weight:700; font-size:16px; letter-spacing:-.025em;
 }
 .sidebar-toggle{margin-left:auto;width:28px;height:28px;flex-shrink:0;display:grid;place-items:center;border:1px solid rgba(255,255,255,.17);border-radius:8px;background:rgba(255,255,255,.06);color:var(--sidebar-text);cursor:pointer;transition:background .18s var(--ease),color .18s var(--ease);}
@@ -143,16 +154,16 @@ input[type=checkbox], input[type=radio]{accent-color:var(--primary);}
 .brand-byline{font:600 10px/1.4 var(--font-inter),sans-serif;letter-spacing:.04em;color:#80ddc4;}
 .org-badge{
   font-size:11px; font-weight:600; color:#d4e2ec; background:rgba(255,255,255,.07);
-  border-radius:10px; padding:9px 12px; margin:0 5px 18px;
+  border-radius:10px; padding:8px 12px; margin:0 5px 12px;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
 .nav-section-label{
   font-size:var(--fs-xs); font-weight:700; letter-spacing:.11em; text-transform:uppercase;
-  color:#83a6ba; padding:22px 14px 8px;
+  color:#83a6ba; padding:14px 14px 6px;
 }
 .nav-item{
-  position:relative; display:flex; align-items:center; gap:12px; padding:9px 12px; border-radius:var(--radius-ctl);
-  cursor:pointer; font-weight:550; margin-bottom:2px; user-select:none; min-width:0; max-width:100%;
+  position:relative; display:flex; align-items:center; gap:12px; padding:7px 12px; border-radius:var(--radius-ctl);
+  cursor:pointer; font-weight:550; margin-bottom:1px; user-select:none; min-width:0; max-width:100%;
   transition:background var(--dur) var(--ease), color var(--dur) var(--ease);
   text-decoration:none; color:inherit;
 }
@@ -171,6 +182,8 @@ input[type=checkbox], input[type=radio]{accent-color:var(--primary);}
 .global-search-trigger:hover{background:rgba(255,255,255,.12); border-color:rgba(22,199,154,.5); color:#fff;}
 
 .sidebar-footer{margin-top:auto; padding:14px 14px 8px; font-size:11px; color:#88a7ba; line-height:1.5;}
+/* Em telas de até 1000px de altura o rodapé informativo cede espaço ao menu. */
+@media (max-height:1000px){ .sidebar-footer{display:none;} }
 .sidebar-user{display:flex; align-items:center; gap:9px; padding:12px; margin-top:4px; border-top:1px solid rgba(255,255,255,.12);}
 .sidebar-user button{background:none;border:none;color:#9fb8c9;cursor:pointer;font-size:11px;font-weight:700; transition:color .15s;}
 .sidebar-user button:hover{color:#fff;}
