@@ -68,9 +68,13 @@ function rangeFor(view: CalendarView, anchor: Date): { from: Date; to: Date; day
   return { from, to: addDays(from, 42), days: Array.from({ length: 42 }, (_, i) => addDays(from, i)) };
 }
 
+function capitalize(s: string) {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 function title(view: CalendarView, anchor: Date, days: Date[]) {
-  if (view === "day") return anchor.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long", year: "numeric" });
-  if (view === "month") return anchor.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+  if (view === "day") return capitalize(anchor.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long", year: "numeric" }));
+  if (view === "month") return capitalize(anchor.toLocaleDateString("pt-BR", { month: "long", year: "numeric" }));
   const a = days[0];
   const b = days[6];
   return `${a.toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })} – ${b.toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" })}`;
@@ -125,6 +129,9 @@ export function CalendarBoard({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
+  // "Agora" só existe no navegador: o servidor roda em outro fuso e a hora
+  // muda entre o SSR e a hidratação. Até montar, mostra só o esqueleto.
+  const [now, setNow] = useState<Date | null>(null);
   const requestId = useRef(0);
 
   const { from, to, days } = useMemo(() => rangeFor(view, anchor), [view, anchor]);
@@ -150,6 +157,18 @@ export function CalendarBoard({
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), POLL_MS);
     return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    const first = setTimeout(() => {
+      setNow(new Date());
+      setAnchor(startOfDay(new Date()));
+    }, 0);
+    const id = setInterval(() => setNow(new Date()), 60_000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(id);
+    };
   }, []);
 
   const colorOf = useMemo(() => new Map(team.map((m) => [m.id, m.color])), [team]);
@@ -214,7 +233,7 @@ export function CalendarBoard({
   const errorNames = (data?.googleErrorUserIds ?? []).map((id) => nameOf.get(id) ?? "um atendente");
 
   function timeGrid(columns: { key: string; label: React.ReactNode; day: Date; ownerId: string | null; today?: boolean }[]) {
-    const now = new Date();
+    if (!now) return null;
     return (
       <div className="cal-grid-wrap">
         <div className="cal-grid" style={{ gridTemplateColumns: `56px repeat(${columns.length}, minmax(140px, 1fr))` }}>
@@ -254,11 +273,13 @@ export function CalendarBoard({
                   const endH = Math.min(24, (item.end.getTime() - dayStart.getTime()) / 3_600_000);
                   const top = (startH - startHour) * HOUR_PX;
                   const height = Math.max(22, (endH - startH) * HOUR_PX - 2);
+                  // Blocos curtos (até ~40 min): hora e título na mesma linha.
+                  const compact = height < 36;
                   return (
                     <button
                       key={item.id}
                       type="button"
-                      className={`cal-event ${item.kind} ${item.cancelled ? "cancelled" : ""}`}
+                      className={`cal-event ${item.kind} ${item.cancelled ? "cancelled" : ""} ${compact ? "compact" : ""}`}
                       style={{
                         top,
                         height,
@@ -358,6 +379,14 @@ export function CalendarBoard({
           );
         })}
       </div>
+    );
+  }
+
+  if (!now) {
+    return (
+      <section className="cal-board" aria-label="Calendário de agendamentos">
+        <div className="empty-state"><div>Carregando agenda…</div></div>
+      </section>
     );
   }
 
