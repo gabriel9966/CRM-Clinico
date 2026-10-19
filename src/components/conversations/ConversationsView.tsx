@@ -114,6 +114,8 @@ export function ConversationsView({
 
   // Conversa aberta: mensagens da mais recente para trás, sob demanda.
   const [selectedId, setSelectedId] = useState<string | null>(initialPage.items[0]?.id ?? null);
+  // No celular só cabe um painel: a lista ou a conversa aberta (com "Voltar").
+  const [mobilePane, setMobilePane] = useState<"list" | "thread">("list");
   const [selectedSnapshot, setSelectedSnapshot] = useState<ConversationRowDTO | null>(initialPage.items[0] ?? null);
   const [selectedContact, setSelectedContact] = useState<ContactDTO | null>(initialPage.items[0]?.contact ?? null);
   const [messages, setMessages] = useState<MessageDTO[]>(initialThread?.items ?? []);
@@ -293,6 +295,7 @@ export function ConversationsView({
   // Trocar de conversa limpa a tela e busca as mensagens da nova (feito no
   // clique, não num efeito: assim não há renderização com a conversa errada).
   function openConversation(row: ConversationRowDTO) {
+    setMobilePane("thread");
     if (row.id === selectedId) return;
     selectedIdRef.current = row.id;
     setSelectedId(row.id);
@@ -511,7 +514,7 @@ export function ConversationsView({
       </div>
       <div className="content">
         {newConversationOpen && <NewConversationDialog connections={connections} onClose={() => setNewConversationOpen(false)} />}
-        <div className="convo-layout">
+        <div className={`convo-layout ${mobilePane === "thread" ? "show-thread" : "show-list"}`}>
           <div className="convo-list">
             <div className="search-bar" style={{ margin: 8 }}>
               <Icon.search />
@@ -597,6 +600,7 @@ export function ConversationsView({
             ) : (
               <>
                 <div className="thread-head">
+                  <button type="button" className="btn small ghost thread-back" onClick={() => setMobilePane("list")} aria-label="Voltar para a lista de conversas">‹ Voltar</button>
                   <span className="avatar md" style={{ background: colorFor(activeContact.name) }}>
                     {initials(activeContact.name)}
                   </span>
