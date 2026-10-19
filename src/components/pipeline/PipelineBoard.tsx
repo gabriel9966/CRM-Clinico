@@ -70,6 +70,7 @@ export function PipelineBoard({
   initialPipelineId,
   initialBoard,
   team,
+  currentUserId,
   customFieldDefs,
   lossReasons,
   tags,
@@ -79,6 +80,8 @@ export function PipelineBoard({
   initialPipelineId: string;
   initialBoard: Board;
   team: TeamMemberDTO[];
+  /** Usuário logado: responsável padrão das oportunidades que ele cria. */
+  currentUserId: string;
   customFieldDefs: CustomFieldDefinitionDTO[];
   lossReasons: { id: string; name: string }[];
   tags: string[];
@@ -446,6 +449,7 @@ export function PipelineBoard({
           data={modal.data}
           pipelines={pipelines}
           team={team}
+          currentUserId={currentUserId}
           customFieldDefs={customFieldDefs}
           lossReasons={lossReasons}
           defaultPipelineId={currentPipelineId}
@@ -525,6 +529,7 @@ function OpportunityModal({
   data,
   pipelines,
   team,
+  currentUserId,
   customFieldDefs,
   lossReasons,
   defaultPipelineId,
@@ -538,6 +543,7 @@ function OpportunityModal({
   data: DealCardDTO | null;
   pipelines: PipelineDTO[];
   team: TeamMemberDTO[];
+  currentUserId: string;
   customFieldDefs: CustomFieldDefinitionDTO[];
   lossReasons: { id: string; name: string }[];
   defaultPipelineId: string;
@@ -683,7 +689,7 @@ function OpportunityModal({
             <div className="field-row">
               <div className="field">
                 <label>Responsável</label>
-                <select name="ownerId" defaultValue={data?.ownerId ?? team[0]?.id ?? ""}>
+                <select name="ownerId" defaultValue={data ? data.ownerId ?? "" : currentUserId}>
                   <option value="">Sem responsável</option>
                   {team.map((m) => (
                     <option key={m.id} value={m.id}>{m.name}</option>

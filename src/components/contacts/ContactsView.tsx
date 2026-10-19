@@ -59,6 +59,7 @@ export function ContactsView({
   initialContactId,
   duplicateCount,
   team,
+  currentUserId,
   pipelines,
   customFieldDefs,
   segments,
@@ -68,6 +69,8 @@ export function ContactsView({
   initialContactId: string | null;
   duplicateCount: number;
   team: TeamMemberDTO[];
+  /** Usuário logado: responsável padrão dos contatos que ele cria. */
+  currentUserId: string;
   pipelines: PipelineDTO[];
   customFieldDefs: CustomFieldDefinitionDTO[];
   segments: SegmentDTO[];
@@ -346,7 +349,7 @@ export function ContactsView({
                   </div>
                   <div className="field">
                     <label>Responsável</label>
-                    <select name="ownerId" defaultValue={modal.data?.ownerId ?? team[0]?.id ?? ""}>
+                    <select name="ownerId" defaultValue={modal.data ? modal.data.ownerId ?? "" : currentUserId}>
                       <option value="">Sem responsável</option>
                       {team.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
                     </select>

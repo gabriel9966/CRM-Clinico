@@ -29,6 +29,7 @@ export default async function ContactsPage({ searchParams }: { searchParams: Pro
       initialContactId={contact ?? null}
       duplicateCount={duplicates.length}
       team={team}
+      currentUserId={user.id}
       pipelines={pipelines}
       customFieldDefs={customFieldDefs}
       segments={segments.filter((s) => s.entity === "CONTACT")}

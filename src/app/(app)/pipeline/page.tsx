@@ -30,6 +30,7 @@ export default async function PipelinePage() {
       initialPipelineId={first?.id ?? ""}
       initialBoard={board}
       team={team}
+      currentUserId={user.id}
       customFieldDefs={customFieldDefs}
       lossReasons={lossReasons.map((reason) => ({ id: reason.id, name: reason.name }))}
       tags={tags.map((tag) => tag.name)}
