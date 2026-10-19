@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useBrowserOrigin } from "@/lib/use-browser-origin";
 import { Icon } from "@/components/icons";
 import { regenerateKey } from "@/app/mcp/actions";
 
@@ -76,12 +77,9 @@ function CopyField({ label, value, secret }: { label: string; value: string; sec
 
 export function McpSettingsView({ apiKey: initialApiKey }: { apiKey: string }) {
   const [apiKey, setApiKey] = useState(initialApiKey);
-  const [mcpUrl, setMcpUrl] = useState("");
+  const mcpUrl = `${useBrowserOrigin()}/api/mcp`;
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    setMcpUrl(`${window.location.origin}/api/mcp`);
-  }, []);
 
   async function handleRegenerate() {
     if (!confirm("Gerar uma nova chave invalida a atual imediatamente — qualquer integração usando a chave antiga vai parar de funcionar até você atualizar lá também. Continuar?")) return;

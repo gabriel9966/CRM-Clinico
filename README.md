@@ -95,6 +95,16 @@ Redefinir a senha de um usuário: `npx tsx prisma/reset-password.ts email@exempl
 
 `docker compose -p novacrm-validation -f compose.validation.yml run --build --rm browser` instala Chromium no contêiner e valida navegação, permissões, notas privadas, templates oficiais e layout desktop/mobile. O script recusa bancos diferentes de `crm_validation`.
 
+As capturas do navegador ficam em `validation-artifacts/` (fora do Git e da imagem Docker).
+
+## Evolution API e Evolution GO
+
+Em Conexões → Nova conexão → WhatsApp, escolha a variante correta. Para criar uma instância exclusiva, use a chave global. Para vincular uma instância GO existente, use o token daquela instância; o CRM não substitui automaticamente seu webhook nem remove a instância externa ao excluir o vínculo.
+
+Para receber mensagens de uma instância vinculada, use **Atualizar webhook**, confirmando a substituição do destino anterior. O botão **Reconectar / QR Code** preserva a sessão/histórico no CRM e acompanha o status até concluir o pareamento. No Docker, `host.docker.internal` permite alcançar serviços instalados no mesmo host sem usar o IP público.
+
+O suporte GO normaliza endpoints, estados, QR Code, IDs de mensagens e eventos de mensagem/entrega/leitura. O teste com um número real exige pareamento pelo proprietário e um contato de teste autorizado; testes simulados não substituem essa homologação.
+
 ## Acesso e recuperação
 
 Novos membros começam sem módulos, pipelines ou instâncias liberados. Usuários desativados não podem entrar. Minha conta permite alterar nome e senha; alterações de senha revogam sessões anteriores.

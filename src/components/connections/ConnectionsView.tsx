@@ -3,6 +3,8 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Icon } from "@/components/icons";
+import { ReconnectDialog } from "./ReconnectDialog";
+import { useBrowserOrigin } from "@/lib/use-browser-origin";
 import type { ConnectionDTO } from "@/lib/types";
 import {
   createWhatsAppConnection,
@@ -50,6 +52,7 @@ export function ConnectionsView({ connections, inboundWebhooks, webhookLogs }: {
   const router = useRouter();
   const [modal, setModal] = useState<null | "choose" | "whatsapp" | "azap" | "cloud" | "instagram" | "email" | "inbound">(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [reconnectId, setReconnectId] = useState<string | null>(null);
 
   async function handleDelete(id: string) {
     if (!confirm("Desconectar e remover esta conexão?")) return;
@@ -90,6 +93,7 @@ export function ConnectionsView({ connections, inboundWebhooks, webhookLogs }: {
   }
 
   async function handleRefreshWebhook(id: string) {
+    if (!confirm("Usar o webhook do CRM nesta instância? Isso substitui o webhook anterior configurado no provedor.")) return;
     setBusyId(id);
     try {
       const res = await refreshWhatsAppWebhook(id);
@@ -129,6 +133,7 @@ export function ConnectionsView({ connections, inboundWebhooks, webhookLogs }: {
                 <div className="connection-card-meta">Instância/conexão ativa para atendimento multicanal · criada em {new Date(c.createdAt).toLocaleDateString("pt-BR")}</div>
                 {c.status === "ERROR" && c.lastError && <div className="connection-error">{c.lastError}</div>}
                 <div className="connection-card-actions">
+                      {c.provider === "WHATSAPP_EVOLUTION" && c.status !== "CONNECTED" && <button type="button" className="btn small primary" onClick={() => setReconnectId(c.id)}>Reconectar / QR Code</button>}
                       {["WHATSAPP_EVOLUTION", "WHATSAPP_AZAP", "WHATSAPP_CLOUD"].includes(c.provider) && (
                         <button className="btn small" disabled={busyId === c.id} onClick={() => handleCheckStatus(c.id)}>
                           Verificar conexão
@@ -161,6 +166,7 @@ export function ConnectionsView({ connections, inboundWebhooks, webhookLogs }: {
         )}
       </div>
 
+      {reconnectId && <ReconnectDialog id={reconnectId} onClose={() => setReconnectId(null)} />}
       {modal === "choose" && (
         <div className="modal-overlay" onClick={() => setModal(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -206,28 +212,36 @@ const whatsAppInitial: CreateWhatsAppState = {};
 function WhatsAppModal({ onClose }: { onClose: () => void }) {
   const router = useRouter();
   const [state, formAction, pending] = useActionState(createWhatsAppConnection, whatsAppInitial);
-  const [qrcode, setQrcode] = useState<string | null>(null);
-  const [connectionId, setConnectionId] = useState<string | null>(null);
+  const [refreshedQr, setQrcode] = useState<string | null>(null);
+  const qrcode = refreshedQr || state.qrcode;
+  const connectionId = state.connectionId;
   const [checking, setChecking] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    if (state.qrcode && state.connectionId) {
-      setQrcode(state.qrcode);
-      setConnectionId(state.connectionId);
+    if (state.connectionId && !state.qrcode && !state.error) {
+      router.refresh(); onClose();
     }
-  }, [state]);
+  }, [state, router, onClose]);
 
   useEffect(() => {
     if (!connectionId) return;
+    let running = false;
     pollRef.current = setInterval(async () => {
+      if (running) return;
+      running = true;
       setChecking(true);
-      const res = await checkWhatsAppStatus(connectionId);
-      setChecking(false);
-      if (res.status === "CONNECTED") {
+      try {
+        const res = await checkWhatsAppStatus(connectionId);
+        if (res.status === "CONNECTED") {
         if (pollRef.current) clearInterval(pollRef.current);
         router.refresh();
         onClose();
+        }
+      } catch {
+        // A conexão pode estar reiniciando; a próxima consulta tenta novamente.
+      } finally {
+        setChecking(false); running = false;
       }
     }, 4000);
     return () => {
@@ -253,6 +267,8 @@ function WhatsAppModal({ onClose }: { onClose: () => void }) {
         {!qrcode ? (
           <form action={formAction}>
             <div className="modal-body">
+              <div className="field"><label>Versão do servidor</label><select name="variant"><option value="v2">Evolution API v2</option><option value="go">Evolution GO</option></select></div>
+              <div className="field"><label>Tipo de conexão</label><select name="mode"><option value="new">Criar uma instância exclusiva para o CRM</option><option value="existing">Vincular instância Evolution GO existente</option></select><small className="muted">Ao vincular, informe o token da instância. O webhook existente será preservado; use Atualizar webhook quando quiser direcionar os eventos ao CRM.</small></div>
               <div className="field">
                 <label>Nome da conexão *</label>
                 <input name="label" required placeholder="Ex: WhatsApp Vendas" autoFocus />
@@ -262,8 +278,8 @@ function WhatsAppModal({ onClose }: { onClose: () => void }) {
                 <input name="baseUrl" required placeholder="https://evolution.seudominio.com" />
               </div>
               <div className="field">
-                <label>API key *</label>
-                <input name="apiKey" type="password" required placeholder="sua api key global" />
+                <label>Chave de acesso *</label>
+                <input name="apiKey" type="password" required placeholder="Global para criar; token da instância para vincular" />
               </div>
               <div className="field">
                 <label>Nome da instância *</label>
@@ -276,7 +292,7 @@ function WhatsAppModal({ onClose }: { onClose: () => void }) {
             <div className="modal-foot">
               <button type="button" className="btn" onClick={onClose}>Cancelar</button>
               <button type="submit" className="btn primary" disabled={pending}>
-                {pending ? "Criando instância..." : "Criar e gerar QR code"}
+                {pending ? "Conectando..." : "Salvar conexão"}
               </button>
             </div>
           </form>
@@ -311,11 +327,7 @@ function InstagramModal({ onClose }: { onClose: () => void }) {
   const router = useRouter();
   const [state, formAction, pending] = useActionState(createInstagramConnection, instagramInitial);
   const wasPending = useRef(false);
-  const [webhookUrl, setWebhookUrl] = useState("");
-
-  useEffect(() => {
-    setWebhookUrl(`${window.location.origin}/api/webhooks/instagram`);
-  }, []);
+  const webhookUrl = `${useBrowserOrigin()}/api/webhooks/instagram`;
 
   useEffect(() => {
     if (wasPending.current && !pending && !state.error) {
@@ -377,11 +389,7 @@ function EmailModal({ onClose }: { onClose: () => void }) {
   const router = useRouter();
   const [state, formAction, pending] = useActionState(createEmailConnection, emailInitial);
   const wasPending = useRef(false);
-  const [webhookUrl, setWebhookUrl] = useState("");
-
-  useEffect(() => {
-    setWebhookUrl(`${window.location.origin}/api/webhooks/email/<connectionId>?token=<token> (use "Copiar webhook" na lista)`);
-  }, []);
+  const webhookUrl = `${useBrowserOrigin()}/api/webhooks/email/<connectionId>?token=<token> (use "Copiar webhook" na lista)`;
 
   useEffect(() => {
     if (wasPending.current && !pending && !state.error) {
@@ -455,9 +463,8 @@ function AzapModal({ onClose }: { onClose: () => void }) {
 function CloudModal({ onClose }: { onClose: () => void }) {
   const router = useRouter();
   const [state, formAction, pending] = useActionState(createWhatsAppCloudConnection, {});
-  const [url, setUrl] = useState("");
+  const url = `${useBrowserOrigin()}/api/webhooks/whatsapp-cloud`;
   const wasPending = useRef(false);
-  useEffect(() => { setUrl(`${window.location.origin}/api/webhooks/whatsapp-cloud`); }, []);
   useEffect(() => { if (wasPending.current && !pending && !state.error) { router.refresh(); onClose(); } wasPending.current = pending; }, [pending, state, router, onClose]);
   return <div className="modal-overlay" onClick={onClose}><div className="modal" onClick={(event) => event.stopPropagation()}><div className="modal-head"><h2>WhatsApp Cloud API oficial</h2><button className="close-x" onClick={onClose}><Icon.close /></button></div><form action={formAction}><div className="modal-body"><p className="muted">Use um token de sistema da Meta com permissão de mensagens. Cadastre a URL abaixo no webhook do App e assine o campo <code>messages</code>.</p><div className="field"><label>Nome da conexão *</label><input name="label" required placeholder="Ex: WhatsApp Oficial" autoFocus /></div><div className="field"><label>Access token *</label><input name="accessToken" type="password" required /></div><div className="field"><label>Phone Number ID *</label><input name="phoneNumberId" required /></div><div className="field-row"><div className="field"><label>Versão Graph API</label><input name="apiVersion" defaultValue="v23.0" /></div><div className="field"><label>Token de verificação *</label><input name="verifyToken" type="password" required /></div></div><div className="field"><label>URL de webhook</label><input readOnly value={url} onFocus={(event) => event.target.select()} /></div>{state.error && <p className="form-error">{state.error}</p>}</div><div className="modal-foot"><button type="button" className="btn" onClick={onClose}>Cancelar</button><button className="btn primary" disabled={pending}>{pending ? "Validando..." : "Conectar"}</button></div></form></div></div>;
 }

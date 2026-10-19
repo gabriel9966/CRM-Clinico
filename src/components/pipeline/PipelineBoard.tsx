@@ -552,10 +552,8 @@ function OpportunityModal({
   const activePipelineId = pendingPipelineId ?? data?.pipelineId ?? defaultPipelineId;
   const activePipeline = pipelines.find((p) => p.id === activePipelineId);
   const stages = activePipeline ? [...activePipeline.stages].sort((a, b) => a.order - b.order) : [];
-  const [selectedStageId, setSelectedStageId] = useState(data?.stageId ?? "");
-  useEffect(() => {
-    setSelectedStageId((current) => stages.some((stage) => stage.id === current) ? current : (stages[0]?.id ?? ""));
-  }, [activePipelineId]);
+  const [preferredStageId, setSelectedStageId] = useState(data?.stageId ?? "");
+  const selectedStageId = stages.some((stage) => stage.id === preferredStageId) ? preferredStageId : (stages[0]?.id ?? "");
   const selectedStage = stages.find((stage) => stage.id === selectedStageId);
   const requiresLossReason = selectedStage?.status === "LOST" || !!selectedStage?.requireLossReason;
   const [historyData, setHistoryData] = useState<{ opportunityId: string; items: OpportunityStageHistoryDTO[] } | null>(null);

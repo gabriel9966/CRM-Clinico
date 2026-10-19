@@ -16,7 +16,6 @@ const { runAutomationById, triggerAppointmentAutomations } = await import("../en
 const { mcpCreateContact, mcpCreateOpportunity } = await import("@/lib/mcp-tools");
 
 const ORG_A = "org-a";
-const ORG_B = "org-b";
 
 function flowWith(nodeData: Flow["nodes"][number]["data"]): Flow {
   return {

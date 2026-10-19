@@ -45,7 +45,7 @@ describe("mcp-tools: isolamento multi-tenant", () => {
   it("mcpGetContact não retorna contato de outra organização", async () => {
     // simula o Prisma aplicando o filtro de verdade: contato pertence à ORG_B,
     // então uma busca com organizationId ORG_A não o encontra.
-    mockPrisma.contact.findFirst.mockImplementation(({ where }: any) => {
+    mockPrisma.contact.findFirst.mockImplementation(({ where }: { where: { id?: string; organizationId?: string } }) => {
       if (where.id === "contact-1" && where.organizationId === ORG_B) {
         return { id: "contact-1", organizationId: ORG_B, opportunities: [], messages: [], tags: "[]" };
       }

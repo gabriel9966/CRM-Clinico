@@ -1,6 +1,7 @@
 node_modules
 .next
 .git
+validation-artifacts
 *.db
 *.db-journal
 .env

@@ -79,7 +79,13 @@ export function AppointmentsView({
   const [reloadKey, setReloadKey] = useState(0);
   const [modal, setModal] = useState<null | { data: AppointmentRowDTO | null }>(null);
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [dismissedNotice, setDismissedNotice] = useState<string | null>(null);
+  const googleError = searchParams.get("error");
+  const noticeKey = searchParams.get("connected") ? "connected" : googleError;
+  const notice = dismissedNotice === noticeKey ? null : noticeKey === "connected" ? "Google Calendar conectado com sucesso!"
+    : googleError === "google_not_configured" ? "O administrador ainda não configurou as credenciais do Google (GOOGLE_CLIENT_ID/SECRET no .env)."
+    : googleError === "google_no_refresh_token" ? "O Google não enviou permissão de acesso contínuo. Revogue o acesso em myaccount.google.com/permissions e tente conectar de novo."
+    : googleError ? "Não foi possível conectar ao Google. Tente novamente." : null;
   const requestId = useRef(0);
   const firstRun = useRef(true);
 
@@ -127,12 +133,6 @@ export function AppointmentsView({
 
   const isConnected = googleConnectedUserIds.includes(currentUserId);
 
-  useEffect(() => {
-    if (searchParams.get("connected")) setNotice("Google Calendar conectado com sucesso!");
-    else if (searchParams.get("error") === "google_not_configured") setNotice("O administrador ainda não configurou as credenciais do Google (GOOGLE_CLIENT_ID/SECRET no .env).");
-    else if (searchParams.get("error") === "google_no_refresh_token") setNotice("O Google não enviou permissão de acesso contínuo. Revogue o acesso em myaccount.google.com/permissions e tente conectar de novo.");
-    else if (searchParams.get("error")) setNotice("Não foi possível conectar ao Google. Tente novamente.");
-  }, [searchParams]);
 
   async function run(fn: () => Promise<void>) {
     setBusy(true);
@@ -202,7 +202,7 @@ export function AppointmentsView({
           <div className="gcal-banner connected" style={{ marginBottom: 16 }}>
             {notice}
             <div style={{ flex: 1 }} />
-            <button className="btn small ghost" onClick={() => setNotice(null)}>Fechar</button>
+            <button className="btn small ghost" onClick={() => setDismissedNotice(noticeKey)}>Fechar</button>
           </div>
         )}
 

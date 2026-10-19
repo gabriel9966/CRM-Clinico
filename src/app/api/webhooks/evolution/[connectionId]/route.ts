@@ -6,7 +6,8 @@ import { guardWebhook } from "@/lib/webhook-auth";
 import { ensureLiveContact } from "@/lib/inbound";
 import { createInboundMessage } from "@/lib/messages";
 import { logWebhook } from "@/lib/webhook-log";
-import { markCampaignResponse } from "@/lib/campaigns";
+import { markCampaignResponse, markCampaignDelivery } from "@/lib/campaigns";
+import { parseEvolutionEvent } from "@/lib/providers/evolution-events";
 
 // Recebe eventos da instância Evolution API do usuário (configurados em
 // /connections) e grava as mensagens recebidas como Message + Contact no CRM.
@@ -25,12 +26,6 @@ type EvolutionWebhookBody = {
     messageTimestamp?: number;
   };
 };
-
-function extractText(data: EvolutionWebhookBody["data"]): string | null {
-  const msg = data?.message;
-  if (!msg) return null;
-  return msg.conversation ?? msg.extendedTextMessage?.text ?? null;
-}
 
 function phoneFromJid(remoteJid: string): string {
   const digits = remoteJid.split("@")[0];
@@ -56,20 +51,28 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ con
   }
 
   const event = body.event ?? "";
-  if (!event.toLowerCase().includes("messages")) {
+  const normalized = parseEvolutionEvent(body);
+  if (normalized.kind === "connection") {
+    await prisma.connection.update({ where: { id: connectionId }, data: { status: normalized.status, lastError: null } });
+    return NextResponse.json({ ok: true });
+  }
+  if (normalized.kind === "receipt") {
+    if (normalized.status) for (const id of normalized.ids) await markCampaignDelivery(id, normalized.status, connectionId);
+    return NextResponse.json({ ok: true });
+  }
+  if (normalized.kind !== "message") {
     return NextResponse.json({ ok: true, ignored: true });
   }
 
-  const data = body.data;
-  const remoteJid = data?.key?.remoteJid;
-  const text = extractText(data);
+  const remoteJid = normalized.jid;
+  const text = normalized.text;
   if (!remoteJid || !text) {
     return NextResponse.json({ ok: true, ignored: true });
   }
 
-  const fromMe = Boolean(data?.key?.fromMe);
+  const fromMe = normalized.fromMe;
   const phone = phoneFromJid(remoteJid);
-  const pushName = data?.pushName || phone;
+  const pushName = normalized.name || phone;
 
   const organizationId = connection.organizationId;
 
@@ -94,7 +97,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ con
 
   const contactId = await ensureLiveContact(channel, organizationId, { name: pushName, phone });
 
-  const time = data?.messageTimestamp ? new Date(data.messageTimestamp * 1000) : new Date();
+  const time = normalized.time;
 
   const inbound = await createInboundMessage(prisma, {
     organizationId,
@@ -104,11 +107,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ con
     direction: fromMe ? "out" : "in",
     time,
     status: "sent",
-    externalMessageId: data?.key?.id,
+    externalMessageId: normalized.id,
   });
 
   if (!fromMe && !inbound.duplicate) {
-    await triggerAutomations(organizationId, "MESSAGE_RECEIVED", { contactId, connectionId, payload: { connectionId, text, messageId: data?.key?.id } });
+    await triggerAutomations(organizationId, "MESSAGE_RECEIVED", { contactId, connectionId, payload: { connectionId, text, messageId: normalized.id } });
     await markCampaignResponse(organizationId, contactId, connectionId);
   }
 

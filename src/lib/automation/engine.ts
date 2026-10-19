@@ -1,7 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
 import { mcpCreateContact, mcpCreateOpportunity, mcpMoveOpportunityStage, mcpSendMessage } from "@/lib/mcp-tools";
-import { recordStageChange } from "@/lib/pipeline-history";
 import { syncTags } from "@/lib/crm-catalog";
 import { postOutboundWebhook } from "@/lib/outbound-webhook";
 import { runCode } from "./sandbox";

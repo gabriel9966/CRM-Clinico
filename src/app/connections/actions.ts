@@ -9,6 +9,7 @@ import * as email from "@/lib/providers/email";
 import * as azap from "@/lib/providers/azap";
 import * as whatsappCloud from "@/lib/providers/whatsapp-cloud";
 import { webhookUrl } from "@/lib/webhook-auth";
+import { randomBytes } from "node:crypto";
 
 function webhookUrlFor(connectionId: string) {
   return webhookUrl("evolution", connectionId);
@@ -39,6 +40,7 @@ export async function refreshWhatsAppWebhook(connectionId: string): Promise<{ ok
   try {
     const config = decryptJson<evolution.EvolutionConfig>(connection.config);
     await evolution.setWebhook(config, webhookUrlFor(connection.id));
+    if (config.variant === "go") await prisma.connection.update({ where: { id: connection.id }, data: { config: encryptJson({ ...config, webhookUrl: webhookUrlFor(connection.id) }) } });
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Falha ao atualizar o webhook." };
@@ -56,12 +58,21 @@ export async function createWhatsAppConnection(
   const baseUrl = String(formData.get("baseUrl") || "").trim();
   const apiKey = String(formData.get("apiKey") || "").trim();
   const instanceName = String(formData.get("instanceName") || "").trim();
+  const variant = formData.get("variant") === "go" ? "go" : "v2";
+  const existing = formData.get("mode") === "existing";
 
   if (!label || !baseUrl || !apiKey || !instanceName) {
     return { error: "Preencha todos os campos." };
   }
 
-  const config = { baseUrl, apiKey, instanceName };
+  try {
+    const url = new URL(baseUrl);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) return { error: "Informe uma URL HTTP/HTTPS válida, sem senha ou parâmetros." };
+  } catch { return { error: "URL do servidor inválida." }; }
+  if (existing && variant !== "go") return { error: "Use Evolution GO para vincular por token de instância." };
+  const config: evolution.EvolutionConfig = { baseUrl, apiKey, instanceName, variant, managedInstance: !existing,
+    ...(variant === "go" ? { instanceToken: existing ? apiKey : randomBytes(32).toString("hex") } : {}),
+  };
 
   const connection = await prisma.connection.create({
     data: {
@@ -74,22 +85,27 @@ export async function createWhatsAppConnection(
   });
 
   try {
-    const created = await evolution.createInstance(config);
-    try {
-      await evolution.setWebhook(config, webhookUrlFor(connection.id));
-    } catch {
-      // Webhook pode falhar se a instância ainda não terminou de subir;
-      // o usuário consegue reconfigurar manualmente no painel da Evolution se preciso.
+    if (existing) {
+      const result = await evolution.getConnectionState(config);
+      const status = result.instance?.state === "open" ? "CONNECTED" : "DISCONNECTED";
+      await prisma.connection.update({ where: { id: connection.id }, data: { status } });
+      revalidatePath("/connections");
+      return { connectionId: connection.id };
     }
+    const created = await evolution.createInstance(config);
+    if (config.variant === "go") config.instanceId = created.instanceId;
+    config.webhookUrl = webhookUrlFor(connection.id);
+    await prisma.connection.update({ where: { id: connection.id }, data: { config: encryptJson(config) } });
+    await evolution.setWebhook(config, config.webhookUrl);
 
-    const qrcode = created.qrcode?.base64;
+    const qrcode = created.qrcode?.base64 || (await evolution.getConnect(config)).base64;
     if (!qrcode) {
       await prisma.connection.update({
         where: { id: connection.id },
-        data: { status: "ERROR", lastError: "A Evolution API não retornou um QR code. Verifique a URL e a API key." },
+        data: { status: "CONNECTING", lastError: "Aguardando QR Code. Use Reconectar / QR Code para tentar novamente." },
       });
       revalidatePath("/connections");
-      return { error: "Instância criada, mas não veio QR code. Confira os dados e tente novamente." };
+      return { connectionId: connection.id, error: "Instância criada. O QR Code ainda não está pronto; use Reconectar / QR Code na conexão." };
     }
 
     revalidatePath("/connections");
@@ -292,8 +308,12 @@ export async function deleteConnection(connectionId: string) {
   if (connection.provider === "WHATSAPP_EVOLUTION") {
     try {
       const config = decryptJson<evolution.EvolutionConfig>(connection.config);
-      await evolution.logoutInstance(config);
-      await evolution.deleteInstance(config);
+      // Instâncias vinculadas podem atender outras ferramentas. Remover do CRM
+      // não deve derrubar a sessão ou apagar a instância externa.
+      if (config.managedInstance) {
+        await evolution.logoutInstance(config);
+        await evolution.deleteInstance(config);
+      }
     } catch {
       // melhor esforço — a instância pode já estar fora do ar
     }
