@@ -10,6 +10,7 @@ const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const CALENDAR_API = "https://www.googleapis.com/calendar/v3";
 const SCOPE = "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email";
+export const GOOGLE_STATE_COOKIE = "google_oauth_state";
 
 function redirectUri() {
   const base = (process.env.APP_BASE_URL || "http://localhost:3000").replace(/\/+$/, "");

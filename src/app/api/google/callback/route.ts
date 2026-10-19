@@ -1,16 +1,35 @@
+import { timingSafeEqual } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { encryptJson } from "@/lib/crypto";
-import { exchangeCodeForTokens } from "@/lib/providers/google-calendar";
+import { readSession } from "@/lib/session";
+import { appUrl } from "@/lib/app-url";
+import { exchangeCodeForTokens, GOOGLE_STATE_COOKIE } from "@/lib/providers/google-calendar";
+
+function sameState(a: string | null | undefined, b: string | null | undefined) {
+  if (!a || !b) return false;
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
+}
+
+function redirectTo(path: string) {
+  const res = NextResponse.redirect(appUrl(path));
+  res.cookies.set(GOOGLE_STATE_COOKIE, "", { path: "/api/google", maxAge: 0 });
+  return res;
+}
 
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl;
   const code = searchParams.get("code");
-  const userId = searchParams.get("state"); // id do usuário que iniciou o fluxo (veio de /api/google/connect)
   const error = searchParams.get("error");
 
-  if (error || !code || !userId) {
-    return NextResponse.redirect(new URL("/appointments?error=google_auth_failed", req.url));
+  const session = await readSession();
+  if (!session) return redirectTo("/login");
+  const userId = session.userId;
+
+  if (error || !code || !sameState(searchParams.get("state"), req.cookies.get(GOOGLE_STATE_COOKIE)?.value)) {
+    return redirectTo("/appointments?error=google_auth_failed");
   }
 
   try {
@@ -19,7 +38,7 @@ export async function GET(req: NextRequest) {
       // Sem refresh_token normalmente significa que a pessoa já tinha autorizado antes
       // e o Google não reemitiu um novo. Pedimos pra revogar o acesso em
       // myaccount.google.com/permissions e tentar conectar de novo.
-      return NextResponse.redirect(new URL("/appointments?error=google_no_refresh_token", req.url));
+      return redirectTo("/appointments?error=google_no_refresh_token");
     }
 
     let email: string | null = null;
@@ -49,8 +68,8 @@ export async function GET(req: NextRequest) {
       },
     });
 
-    return NextResponse.redirect(new URL("/appointments?connected=1", req.url));
+    return redirectTo("/appointments?connected=1");
   } catch {
-    return NextResponse.redirect(new URL("/appointments?error=google_auth_failed", req.url));
+    return redirectTo("/appointments?error=google_auth_failed");
   }
 }

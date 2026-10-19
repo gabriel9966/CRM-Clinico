@@ -1,14 +1,27 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { randomBytes } from "node:crypto";
+import { NextResponse } from "next/server";
 import { readSession } from "@/lib/session";
-import { buildAuthUrl } from "@/lib/providers/google-calendar";
+import { appUrl } from "@/lib/app-url";
+import { buildAuthUrl, GOOGLE_STATE_COOKIE } from "@/lib/providers/google-calendar";
 
-export async function GET(req: NextRequest) {
+export async function GET() {
   const session = await readSession();
-  if (!session) return NextResponse.redirect(new URL("/login", req.url));
+  if (!session) return NextResponse.redirect(appUrl("/login"));
 
   if (!process.env.GOOGLE_CLIENT_ID) {
-    return NextResponse.redirect(new URL("/appointments?error=google_not_configured", req.url));
+    return NextResponse.redirect(appUrl("/appointments?error=google_not_configured"));
   }
 
-  return NextResponse.redirect(buildAuthUrl(session.userId));
+  // state aleatório amarrado a este navegador: o callback só aceita o retorno
+  // se o cookie bater, e usa o usuário da sessão (nunca o que vier na URL).
+  const state = randomBytes(24).toString("base64url");
+  const res = NextResponse.redirect(buildAuthUrl(state));
+  res.cookies.set(GOOGLE_STATE_COOKIE, state, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/api/google",
+    maxAge: 600,
+  });
+  return res;
 }
