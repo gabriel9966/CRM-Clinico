@@ -2,6 +2,8 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # AOF: filas de automações e campanhas (BullMQ) sobrevivem a reinícios.
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
     volumes:
       - novacrm_redis:/data
 
