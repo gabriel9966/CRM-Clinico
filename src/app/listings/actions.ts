@@ -4,10 +4,12 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireOrgUser } from "@/lib/auth";
 import { allowedConnectionIds, allowedPipelineIds, canAccessConnection, canAccessPipeline, getOwnerScope, hasModulePermission } from "@/lib/access";
-import { findDuplicateContacts } from "@/lib/data";
+import { findDuplicateContacts, getGoogleConnectedUserIds } from "@/lib/data";
+import { listCalendarEvents } from "@/lib/providers/google-calendar";
 import { segmentWhere } from "@/lib/segments";
 import {
   getActivitiesPage,
+  getAppointmentsBetween,
   getAppointmentsPage,
   getChannelsFor,
   getConversationMessagesPage,
@@ -23,7 +25,7 @@ import {
   type ContactListQuery,
   type StageCardsQuery,
 } from "@/lib/queries";
-import type { ConversationChannelInfo } from "@/lib/types";
+import type { ConversationChannelInfo, GoogleEventDTO } from "@/lib/types";
 
 // Ações de leitura chamadas pelas telas para carregar mais itens, buscar e
 // filtrar no servidor. Todas partem do usuário autenticado: a organização
@@ -145,6 +147,50 @@ export async function fetchActivities(filter: ActivityFilter, cursor?: string) {
   const user = await requireOrgUser(); const { organizationId } = user;
   if (!hasModulePermission(user, "agenda.read")) return { items: [], nextCursor: null, total: 0 };
   return getActivitiesPage(organizationId, { filter, cursor });
+}
+
+const MAX_CALENDAR_RANGE_MS = 43 * 86_400_000; // uma grade de mês (6 semanas) com folga
+
+/**
+ * Dados das visões de calendário (dia/semana/mês): agendamentos do CRM no
+ * intervalo e os eventos com horário das agendas Google dos atendentes
+ * conectados. Eventos criados pelo próprio CRM não se repetem. Da agenda dos
+ * colegas só aparece "Ocupado"; título e link só para o dono.
+ */
+export async function fetchCalendarRange(fromIso: string, toIso: string) {
+  const user = await requireOrgUser(); const { organizationId } = user;
+  const empty = { appointments: [], googleEvents: [], googleErrorUserIds: [] };
+  if (!hasModulePermission(user, "agenda.read")) return empty;
+  const from = new Date(fromIso);
+  const to = new Date(toIso);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || to <= from || to.getTime() - from.getTime() > MAX_CALENDAR_RANGE_MS) {
+    throw new Error("Intervalo de datas inválido.");
+  }
+
+  const [appointments, connected] = await Promise.all([
+    getAppointmentsBetween(organizationId, from, to),
+    getGoogleConnectedUserIds(organizationId),
+  ]);
+  const crmEventIds = new Set(appointments.map((a) => a.googleEventId).filter(Boolean));
+
+  const googleEvents: GoogleEventDTO[] = [];
+  const googleErrorUserIds: string[] = [];
+  const ownerIds = [...connected];
+  const results = await Promise.allSettled(ownerIds.map((ownerId) => listCalendarEvents(ownerId, from, to)));
+  results.forEach((result, i) => {
+    const ownerId = ownerIds[i];
+    if (result.status === "rejected") {
+      googleErrorUserIds.push(ownerId);
+      return;
+    }
+    const mine = ownerId === user.id;
+    for (const e of result.value ?? []) {
+      if (crmEventIds.has(e.id)) continue;
+      googleEvents.push({ ...e, ownerId, title: mine ? e.title : "Ocupado", htmlLink: mine ? e.htmlLink : null });
+    }
+  });
+
+  return { appointments, googleEvents, googleErrorUserIds };
 }
 
 export async function fetchAppointments(range: AppointmentRange, cursor?: string) {

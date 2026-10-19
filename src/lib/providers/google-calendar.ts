@@ -1,6 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
 import { encryptJson, decryptJson } from "@/lib/crypto";
+import type { GoogleEventDTO } from "@/lib/types";
 
 // Integração com o Google Calendar via OAuth2 + REST (sem SDK pesado).
 // Cada atendente conecta a própria conta (ver /connections/google e a
@@ -135,6 +136,48 @@ export async function updateCalendarEvent(userId: string, eventId: string, input
       end: { dateTime: input.endAt.toISOString() },
     }),
   });
+}
+
+type GoogleApiEvent = {
+  id: string;
+  status?: string;
+  summary?: string;
+  htmlLink?: string;
+  start?: { dateTime?: string; date?: string };
+  end?: { dateTime?: string; date?: string };
+};
+
+// Eventos com horário da agenda do usuário no intervalo (recorrentes já
+// expandidos). Eventos de dia inteiro ficam de fora: não ocupam horário.
+export async function listCalendarEvents(userId: string, from: Date, to: Date): Promise<Omit<GoogleEventDTO, "ownerId">[] | null> {
+  const token = await getValidAccessToken(userId);
+  if (!token) return null;
+  const account = await prisma.googleAccount.findUnique({ where: { userId } });
+  const calendarId = account?.calendarId || "primary";
+
+  const params = new URLSearchParams({
+    timeMin: from.toISOString(),
+    timeMax: to.toISOString(),
+    singleEvents: "true",
+    orderBy: "startTime",
+    maxResults: "500",
+  });
+  const res = await fetch(`${CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events?${params}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.error?.message || "Falha ao ler eventos do Google Calendar");
+
+  return ((json.items ?? []) as GoogleApiEvent[])
+    .filter((e) => e.status !== "cancelled" && e.start?.dateTime && e.end?.dateTime)
+    .map((e) => ({
+      id: e.id,
+      title: e.summary || "(sem título)",
+      startAt: new Date(e.start!.dateTime!).toISOString(),
+      endAt: new Date(e.end!.dateTime!).toISOString(),
+      htmlLink: e.htmlLink ?? null,
+    }));
 }
 
 export async function deleteCalendarEvent(userId: string, eventId: string) {

@@ -635,6 +635,28 @@ export async function getAppointmentsPage(
   };
 }
 
+/** Agendamentos que começam no intervalo [from, to), para as visões de calendário. */
+export async function getAppointmentsBetween(organizationId: string, from: Date, to: Date): Promise<AppointmentRowDTO[]> {
+  const rows = await prisma.appointment.findMany({
+    where: { organizationId, startAt: { gte: from, lt: to } },
+    include: { contact: { select: { name: true } } },
+    orderBy: [{ startAt: "asc" }, { id: "asc" }],
+    take: 1000,
+  });
+  return rows.map((a) => ({
+    id: a.id,
+    title: a.title,
+    notes: a.notes,
+    startAt: a.startAt.toISOString(),
+    endAt: a.endAt.toISOString(),
+    status: a.status,
+    googleEventId: a.googleEventId,
+    contactId: a.contactId,
+    ownerId: a.ownerId,
+    contactName: a.contact?.name ?? null,
+  }));
+}
+
 // ── Dashboard / equipe ──────────────────────────────────────────────────────
 
 export type DashboardAggregates = {

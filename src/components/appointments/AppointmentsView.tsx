@@ -15,9 +15,13 @@ import {
 } from "@/app/appointments/actions";
 import { fetchAppointments } from "@/app/listings/actions";
 import { EntityPicker } from "@/components/shared/EntityPicker";
+import { CalendarBoard } from "./CalendarBoard";
 
 type Range = "upcoming" | "past";
-type ScheduleView = "list" | "week";
+type ScheduleView = "list" | "day" | "week" | "month";
+type CreatePreset = { date: string; startTime: string; ownerId: string | null };
+
+const VIEW_LABEL: Record<ScheduleView, string> = { list: "Lista", day: "Dia", week: "Semana", month: "Mês" };
 
 const STATUS_LABEL: Record<AppointmentDTO["status"], string> = {
   SCHEDULED: "Agendado",
@@ -44,15 +48,10 @@ function dayKey(iso: string) {
   return new Date(iso).toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" });
 }
 
-function startOfWeek(date = new Date()) {
-  const start = new Date(date);
-  start.setHours(0, 0, 0, 0);
-  start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
-  return start;
-}
-
-function sameDay(a: Date, b: Date) {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+function plusMinutes(time: string, minutes: number) {
+  const [h, m] = time.split(":").map(Number);
+  const total = Math.min(23 * 60 + 59, h * 60 + m + minutes);
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
 
 export function AppointmentsView({
@@ -70,14 +69,14 @@ export function AppointmentsView({
   const router = useRouter();
   const searchParams = useSearchParams();
   const [range, setRange] = useState<Range>("upcoming");
-  const [scheduleView, setScheduleView] = useState<ScheduleView>("list");
+  const [scheduleView, setScheduleView] = useState<ScheduleView>("day");
   const [appointments, setAppointments] = useState<AppointmentRowDTO[]>(initialPage.items);
   const [nextCursor, setNextCursor] = useState<string | null>(initialPage.nextCursor);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  const [modal, setModal] = useState<null | { data: AppointmentRowDTO | null }>(null);
+  const [modal, setModal] = useState<null | { data: AppointmentRowDTO | null; preset?: CreatePreset }>(null);
   const [busy, setBusy] = useState(false);
   const [dismissedNotice, setDismissedNotice] = useState<string | null>(null);
   const googleError = searchParams.get("error");
@@ -179,12 +178,6 @@ export function AppointmentsView({
     return id ? team.find((m) => m.id === id) : undefined;
   }
 
-  const weekDays = Array.from({ length: 7 }, (_, index) => {
-    const day = startOfWeek();
-    day.setDate(day.getDate() + index);
-    return day;
-  });
-
   return (
     <>
       <div className="topbar">
@@ -224,76 +217,40 @@ export function AppointmentsView({
         </div>
 
         <div className="pipeline-bar">
-          {(["upcoming", "past"] as const).map((r) => (
-            <div key={r} className={`pipeline-tab ${range === r ? "active" : ""}`} onClick={() => setRange(r)}>
-              {r === "upcoming" ? "Próximos" : "Anteriores"}
-            </div>
-          ))}
-          {range === "upcoming" && (
-            <div className="schedule-view-toggle" aria-label="Visualização da agenda">
+          {scheduleView === "list" &&
+            (["upcoming", "past"] as const).map((r) => (
+              <div key={r} className={`pipeline-tab ${range === r ? "active" : ""}`} onClick={() => setRange(r)}>
+                {r === "upcoming" ? "Próximos" : "Anteriores"}
+              </div>
+            ))}
+          <div className="schedule-view-toggle" aria-label="Visualização da agenda">
+            {(["day", "week", "month", "list"] as const).map((v) => (
               <button
+                key={v}
                 type="button"
-                className={scheduleView === "list" ? "active" : ""}
-                aria-pressed={scheduleView === "list"}
-                onClick={() => setScheduleView("list")}
+                className={scheduleView === v ? "active" : ""}
+                aria-pressed={scheduleView === v}
+                onClick={() => setScheduleView(v)}
               >
-                Lista
+                {VIEW_LABEL[v]}
               </button>
-              <button
-                type="button"
-                className={scheduleView === "week" ? "active" : ""}
-                aria-pressed={scheduleView === "week"}
-                onClick={() => setScheduleView("week")}
-              >
-                Semana
-              </button>
-            </div>
-          )}
-          {loading && <span className="muted" style={{ fontSize: 12 }}>Atualizando…</span>}
+            ))}
+          </div>
+          {scheduleView === "list" && loading && <span className="muted" style={{ fontSize: 12 }}>Atualizando…</span>}
         </div>
-        {loadError && <p style={{ color: "var(--red)", fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{loadError}</p>}
+        {scheduleView === "list" && loadError && <p style={{ color: "var(--red)", fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{loadError}</p>}
 
-        {appointments.length === 0 ? (
+        {scheduleView !== "list" ? (
+          <CalendarBoard
+            view={scheduleView}
+            team={team}
+            currentUserId={currentUserId}
+            reloadKey={reloadKey}
+            onOpenAppointment={(a) => setModal({ data: a })}
+            onCreateAt={(preset) => setModal({ data: null, preset })}
+          />
+        ) : appointments.length === 0 ? (
           <div className="empty-state"><Icon.calendar /><div>{loading ? "Carregando…" : "Nenhum agendamento aqui"}</div></div>
-        ) : range === "upcoming" && scheduleView === "week" ? (
-          <section className="week-schedule" aria-label="Agenda da semana atual">
-            {weekDays.map((day) => {
-              const items = appointments
-                .filter((appointment) => sameDay(new Date(appointment.startAt), day))
-                .sort((a, b) => a.startAt.localeCompare(b.startAt));
-              const today = sameDay(day, new Date());
-              return (
-                <div key={day.toISOString()} className={`week-day ${today ? "today" : ""}`}>
-                  <div className="week-day-head">
-                    <span>{day.toLocaleDateString("pt-BR", { weekday: "short" }).replace(".", "")}</span>
-                    <strong>{day.getDate()}</strong>
-                  </div>
-                  <div className="week-day-events">
-                    {items.length === 0 ? (
-                      <span className="week-free">Livre</span>
-                    ) : (
-                      items.map((appointment) => {
-                        const owner = ownerOf(appointment.ownerId);
-                        return (
-                          <button
-                            type="button"
-                            key={appointment.id}
-                            className={`week-event ${appointment.status === "CANCELLED" ? "cancelled" : ""}`}
-                            onClick={() => setModal({ data: appointment })}
-                            style={{ "--event-color": STATUS_COLOR[appointment.status] } as React.CSSProperties}
-                          >
-                            <span>{new Date(appointment.startAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</span>
-                            <strong>{appointment.title}</strong>
-                            <small>{appointment.contactName ?? owner?.name ?? "Sem contato"}</small>
-                          </button>
-                        );
-                      })
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </section>
         ) : (
           [...groups.entries()].map(([day, items]) => (
             <div key={day} className="day-group">
@@ -328,7 +285,7 @@ export function AppointmentsView({
           ))
         )}
 
-        {nextCursor && (
+        {scheduleView === "list" && nextCursor && (
           <div style={{ textAlign: "center", marginTop: 14 }}>
             <button className="btn" onClick={loadMore} disabled={loadingMore}>
               {loadingMore ? "Carregando…" : "Carregar mais"}
@@ -353,15 +310,15 @@ export function AppointmentsView({
                 <div className="field-row">
                   <div className="field">
                     <label>Data *</label>
-                    <input name="date" type="date" required defaultValue={toLocalInputValue(modal.data ? modal.data.startAt : new Date().toISOString()).slice(0, 10)} />
+                    <input name="date" type="date" required defaultValue={modal.data ? toLocalInputValue(modal.data.startAt).slice(0, 10) : modal.preset?.date ?? toLocalInputValue(new Date().toISOString()).slice(0, 10)} />
                   </div>
                   <div className="field">
                     <label>Início *</label>
-                    <input name="startTime" type="time" required defaultValue={modal.data ? toLocalInputValue(modal.data.startAt).slice(11) : "09:00"} />
+                    <input name="startTime" type="time" required defaultValue={modal.data ? toLocalInputValue(modal.data.startAt).slice(11) : modal.preset?.startTime ?? "09:00"} />
                   </div>
                   <div className="field">
                     <label>Fim *</label>
-                    <input name="endTime" type="time" required defaultValue={modal.data ? toLocalInputValue(modal.data.endAt).slice(11) : "09:30"} />
+                    <input name="endTime" type="time" required defaultValue={modal.data ? toLocalInputValue(modal.data.endAt).slice(11) : plusMinutes(modal.preset?.startTime ?? "09:00", 30)} />
                   </div>
                 </div>
                 <div className="field-row">
@@ -376,7 +333,7 @@ export function AppointmentsView({
                   </div>
                   <div className="field">
                     <label>Atendente (calendário)</label>
-                    <select name="ownerId" defaultValue={modal.data?.ownerId ?? currentUserId}>
+                    <select name="ownerId" defaultValue={modal.data ? modal.data.ownerId ?? "" : modal.preset ? modal.preset.ownerId ?? "" : currentUserId}>
                       <option value="">Sem responsável</option>
                       {team.map((m) => (
                         <option key={m.id} value={m.id}>

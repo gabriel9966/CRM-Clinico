@@ -161,6 +161,19 @@ export type ActivityRowDTO = ActivityDTO & {
 
 export type AppointmentRowDTO = AppointmentDTO & { contactName: string | null };
 
+/** Evento lido da agenda Google de um atendente (somente leitura no CRM). */
+export type GoogleEventDTO = {
+  id: string;
+  /** Atendente dono da agenda. */
+  ownerId: string;
+  /** Título real só para o próprio dono; para os demais, "Ocupado". */
+  title: string;
+  startAt: string;
+  endAt: string;
+  /** Link para abrir no Google Agenda (só para o próprio dono). */
+  htmlLink: string | null;
+};
+
 export type AutomationDTO = {
   id: string;
   name: string;
