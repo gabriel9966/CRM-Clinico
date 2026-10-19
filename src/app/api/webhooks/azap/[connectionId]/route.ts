@@ -15,7 +15,7 @@ const pick = (body: Record<string, unknown>, names: string[]) => names.map((name
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ connectionId: string }> }) {
   const { connectionId } = await params;
-  const denied = guardWebhook(req, "azap", connectionId);
+  const denied = await guardWebhook(req, "azap", connectionId);
   if (denied) return denied;
   const connection = await prisma.connection.findUnique({ where: { id: connectionId } });
   if (!connection || connection.provider !== "WHATSAPP_AZAP") return NextResponse.json({ ok: false }, { status: 404 });

@@ -37,7 +37,7 @@ function extractEmailAddress(raw: string): string {
 export async function POST(req: NextRequest, { params }: { params: Promise<{ connectionId: string }> }) {
   const { connectionId } = await params;
 
-  const denied = guardWebhook(req, "email", connectionId);
+  const denied = await guardWebhook(req, "email", connectionId);
   if (denied) return denied;
 
   const connection = await prisma.connection.findUnique({ where: { id: connectionId } });

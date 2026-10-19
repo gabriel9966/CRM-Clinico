@@ -4,7 +4,8 @@ import { cookies } from "next/headers";
 
 const COOKIE_NAME = "crm_session";
 const secret = new TextEncoder().encode(process.env.SESSION_SECRET);
-const SESSION_DURATION_SECONDS = 60 * 60 * 24 * 30; // 30 days
+if (secret.byteLength < 32) throw new Error("SESSION_SECRET precisa ter pelo menos 32 bytes.");
+const SESSION_DURATION_SECONDS = 60 * 60 * 24 * 7;
 
 export type SessionPayload = {
   userId: string;
@@ -38,7 +39,7 @@ export async function readSession(): Promise<SessionPayload | null> {
   const token = cookieStore.get(COOKIE_NAME)?.value;
   if (!token) return null;
   try {
-    const { payload } = await jwtVerify(token, secret);
+    const { payload } = await jwtVerify(token, secret, { algorithms: ["HS256"], maxTokenAge: "7 days" });
     if (typeof payload.userId !== "string") return null;
     return { userId: payload.userId, sessionVersion: typeof payload.sessionVersion === "number" ? payload.sessionVersion : 0 };
   } catch {

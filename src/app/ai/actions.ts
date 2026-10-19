@@ -6,7 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { requireAdminUser, requireOrgUser } from "@/lib/auth";
 import { actorOf, audit } from "@/lib/audit";
 import { decryptJson, encryptJson } from "@/lib/crypto";
-import { rateLimit } from "@/lib/rate-limit";
+import { sharedRateLimit } from "@/lib/shared-rate-limit";
 import { AI_TOOL_NAMES, DEFAULT_AI_MODEL, isAiEffort, isAiModel } from "@/lib/ai/models";
 import { resumeAiInConversation, runAgentTest, testConnection } from "@/lib/ai/agent";
 import type { Flow } from "@/lib/automation/types";
@@ -110,7 +110,7 @@ export async function checkAiAgentConnection(id: string): Promise<AiResult> {
 /** Playground: conversa de teste como se fosse o cliente. Não envia nada nem grava na agenda. */
 export async function chatWithAiAgent(id: string, turns: { role: "user" | "assistant"; content: string }[]) {
   const user = await requireAdminUser();
-  const limit = rateLimit(`ai-test:${user.id}`, { limit: 20, windowMs: 60_000 });
+  const limit = await sharedRateLimit(`ai-test:${user.id}`, { limit: 20, windowMs: 60_000 });
   if (!limit.ok) return { ok: false as const, error: "Muitos testes seguidos. Aguarde um instante." };
   const safeTurns = turns.slice(-20).map((t) => ({ role: t.role === "assistant" ? ("assistant" as const) : ("user" as const), content: String(t.content ?? "").slice(0, 2000) }));
   return runAgentTest({ organizationId: user.organizationId, agentId: id, turns: safeTurns });

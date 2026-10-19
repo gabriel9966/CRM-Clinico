@@ -3,12 +3,13 @@ import { jwtVerify } from "jose";
 
 const COOKIE_NAME = "crm_session";
 const secret = new TextEncoder().encode(process.env.SESSION_SECRET);
+if (secret.byteLength < 32) throw new Error("SESSION_SECRET precisa ter pelo menos 32 bytes.");
 
 async function hasValidSession(req: NextRequest) {
   const token = req.cookies.get(COOKIE_NAME)?.value;
   if (!token) return false;
   try {
-    await jwtVerify(token, secret);
+    await jwtVerify(token, secret, { algorithms: ["HS256"], maxTokenAge: "7 days" });
     return true;
   } catch {
     return false;

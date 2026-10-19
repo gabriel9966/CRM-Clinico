@@ -5,7 +5,8 @@ import { headers } from "next/headers";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { createSession } from "@/lib/session";
-import { clearRateLimit, clientIp, rateLimit } from "@/lib/rate-limit";
+import { clientIp } from "@/lib/rate-limit";
+import { clearSharedRateLimit, sharedRateLimit } from "@/lib/shared-rate-limit";
 
 export type LoginState = { error?: string };
 
@@ -31,8 +32,10 @@ export async function loginAction(
 
   const ip = clientIp(await headers());
   const emailKey = `login:email:${email}`;
-  const byIp = rateLimit(`login:ip:${ip}`, IP_LIMIT);
-  const byEmail = rateLimit(emailKey, EMAIL_LIMIT);
+  const [byIp, byEmail] = await Promise.all([
+    sharedRateLimit(`login:ip:${ip}`, IP_LIMIT),
+    sharedRateLimit(emailKey, EMAIL_LIMIT),
+  ]);
   if (!byIp.ok || !byEmail.ok) {
     const wait = Math.ceil(Math.max(byIp.retryAfterSec, byEmail.retryAfterSec) / 60);
     return { error: `Muitas tentativas. Tente novamente em ${wait} min.` };
@@ -48,7 +51,7 @@ export async function loginAction(
     return { error: "O acesso da sua empresa está suspenso. Fale com o administrador da plataforma." };
   }
 
-  clearRateLimit(emailKey);
+  await clearSharedRateLimit(emailKey);
   await createSession(user.id, user.sessionVersion);
   redirect(user.isSuperAdmin ? "/admin" : "/dashboard");
 }

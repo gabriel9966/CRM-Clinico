@@ -1,7 +1,8 @@
 import "server-only";
 import { createHmac, timingSafeEqual } from "crypto";
 import { NextResponse, type NextRequest } from "next/server";
-import { clientIp, rateLimit } from "./rate-limit";
+import { clientIp } from "./rate-limit";
+import { sharedRateLimit } from "./shared-rate-limit";
 
 // Autenticação dos webhooks de entrada. Antes, o único "segredo" era o id da
 // conexão na URL (que aparece em telas, logs e histórico de navegador). Agora
@@ -44,9 +45,9 @@ const WEBHOOK_LIMIT = { limit: 240, windowMs: 60_000 };
  * Porta de entrada de todo webhook com id na URL: limita a taxa por origem e
  * confere o token. Devolve a resposta de recusa, ou null se pode seguir.
  */
-export function guardWebhook(req: NextRequest, kind: WebhookKind, id: string): NextResponse | null {
+export async function guardWebhook(req: NextRequest, kind: WebhookKind, id: string): Promise<NextResponse | null> {
   const ip = clientIp(req.headers);
-  const rl = rateLimit(`webhook:${kind}:${id}:${ip}`, WEBHOOK_LIMIT);
+  const rl = await sharedRateLimit(`webhook:${kind}:${id}:${ip}`, WEBHOOK_LIMIT);
   if (!rl.ok) {
     return NextResponse.json(
       { ok: false, error: "rate_limited" },
@@ -79,7 +80,7 @@ export function webhookUrl(kind: WebhookKind, id: string): string {
  * (mantém o comportamento antigo até o segredo ser configurado).
  */
 export function verifyMetaSignature(rawBody: string, header: string | null, appSecret: string | undefined) {
-  if (!appSecret) return { ok: true as const, enforced: false as const };
+  if (!appSecret) return { ok: false as const, enforced: false as const };
   if (!header?.startsWith("sha256=")) return { ok: false as const, enforced: true as const };
   const expected = createHmac("sha256", appSecret).update(rawBody).digest("hex");
   return { ok: safeEqual(header.slice(7), expected), enforced: true as const };

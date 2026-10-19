@@ -175,6 +175,10 @@ export async function createInstagramConnection(
   const accessToken = String(formData.get("accessToken") || "").trim();
   const igUserId = String(formData.get("igUserId") || "").trim();
 
+  if (!process.env.INSTAGRAM_APP_SECRET) {
+    return { error: "Configure INSTAGRAM_APP_SECRET no servidor para receber mensagens com assinatura validada." };
+  }
+
   if (!label || !accessToken || !igUserId) {
     return { error: "Preencha todos os campos." };
   }
@@ -279,6 +283,9 @@ export async function createAzapConnection(_prev: CreateAzapState, formData: For
 export type CreateWhatsAppCloudState = { error?: string };
 export async function createWhatsAppCloudConnection(_prev: CreateWhatsAppCloudState, formData: FormData): Promise<CreateWhatsAppCloudState> {
   const { organizationId } = await requireAdminUser();
+  if (!process.env.WHATSAPP_CLOUD_APP_SECRET) {
+    return { error: "Configure WHATSAPP_CLOUD_APP_SECRET no servidor para receber mensagens com assinatura validada." };
+  }
   const label = String(formData.get("label") || "").trim();
   const accessToken = String(formData.get("accessToken") || "").trim();
   const phoneNumberId = String(formData.get("phoneNumberId") || "").trim();

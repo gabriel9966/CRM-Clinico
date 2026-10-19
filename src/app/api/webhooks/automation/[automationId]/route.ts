@@ -10,7 +10,7 @@ import { checkWebhookToken, guardWebhook } from "@/lib/webhook-auth";
 export async function POST(req: NextRequest, { params }: { params: Promise<{ automationId: string }> }) {
   const { automationId } = await params;
 
-  const denied = guardWebhook(req, "automation", automationId);
+  const denied = await guardWebhook(req, "automation", automationId);
   if (denied) return denied;
   // Automações usam sempre a URL gerada no editor; não há webhook legado
   // a preservar. Sem o token, qualquer pessoa com o id poderia executar o fluxo.

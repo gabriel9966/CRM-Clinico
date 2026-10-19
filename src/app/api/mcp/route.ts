@@ -14,7 +14,8 @@ import {
   mcpSendMessage,
 } from "@/lib/mcp-tools";
 import { resolveOrgByMcpApiKey } from "@/lib/mcp-config";
-import { clientIp, rateLimit } from "@/lib/rate-limit";
+import { clientIp } from "@/lib/rate-limit";
+import { sharedRateLimit } from "@/lib/shared-rate-limit";
 import { listProfessionals, listProcedures } from "@/lib/scheduling/catalog";
 import { AppError } from "@/lib/errors";
 import {
@@ -256,7 +257,7 @@ async function schedulingResult(fn: () => Promise<unknown>) {
 }
 
 async function handle(req: NextRequest) {
-  const rl = rateLimit(`mcp:ip:${clientIp(req.headers)}`, { limit: 300, windowMs: 60_000 });
+  const rl = await sharedRateLimit(`mcp:ip:${clientIp(req.headers)}`, { limit: 300, windowMs: 60_000 });
   if (!rl.ok) {
     return new Response(JSON.stringify({ error: "rate_limited" }), {
       status: 429,

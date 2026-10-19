@@ -45,36 +45,36 @@ describe("checkWebhookToken", () => {
 });
 
 describe("guardWebhook", () => {
-  it("token correto passa", () => {
-    expect(guardWebhook(req(`?token=${webhookToken("evolution", "c1")}`), "evolution", "c1")).toBeNull();
+  it("token correto passa", async () => {
+    expect(await guardWebhook(req(`?token=${webhookToken("evolution", "c1")}`), "evolution", "c1")).toBeNull();
   });
 
   it("token errado é 401 mesmo no modo de migração", async () => {
-    const res = guardWebhook(req("?token=errado"), "evolution", "c1");
+    const res = await guardWebhook(req("?token=errado"), "evolution", "c1");
     expect(res?.status).toBe(401);
     expect(await res?.json()).toMatchObject({ error: "invalid_token" });
   });
 
-  it("sem token: passa (migração) e registra aviso", () => {
-    expect(guardWebhook(req(), "evolution", "c1")).toBeNull();
+  it("sem token: passa (migração) e registra aviso", async () => {
+    expect(await guardWebhook(req(), "evolution", "c1")).toBeNull();
     expect(console.warn).toHaveBeenCalled();
   });
 
   it("sem token com WEBHOOK_REQUIRE_TOKEN=true: 401", async () => {
     process.env.WEBHOOK_REQUIRE_TOKEN = "true";
-    const res = guardWebhook(req(), "evolution", "c1");
+    const res = await guardWebhook(req(), "evolution", "c1");
     expect(res?.status).toBe(401);
     expect(await res?.json()).toMatchObject({ error: "token_required" });
   });
 
-  it("aplica rate limit por origem (429 com Retry-After)", () => {
+  it("aplica rate limit por origem (429 com Retry-After)", async () => {
     const t = webhookToken("evolution", "c1");
     let last = null;
-    for (let i = 0; i < 241; i++) last = guardWebhook(req(`?token=${t}`, { "x-real-ip": "7.7.7.7" }), "evolution", "c1");
+    for (let i = 0; i < 241; i++) last = await guardWebhook(req(`?token=${t}`, { "x-real-ip": "7.7.7.7" }), "evolution", "c1");
     expect(last?.status).toBe(429);
     expect(last?.headers.get("retry-after")).toBeTruthy();
     // outra origem não é afetada
-    expect(guardWebhook(req(`?token=${t}`, { "x-real-ip": "8.8.8.8" }), "evolution", "c1")).toBeNull();
+    expect(await guardWebhook(req(`?token=${t}`, { "x-real-ip": "8.8.8.8" }), "evolution", "c1")).toBeNull();
   });
 });
 
@@ -88,8 +88,8 @@ describe("verifyMetaSignature", () => {
   const body = '{"entry":[]}';
   const sign = (b: string, secret: string) => "sha256=" + createHmac("sha256", secret).update(b).digest("hex");
 
-  it("sem app secret configurado não exige assinatura", () => {
-    expect(verifyMetaSignature(body, null, undefined)).toEqual({ ok: true, enforced: false });
+  it("sem app secret configurado recusa o webhook", () => {
+    expect(verifyMetaSignature(body, null, undefined)).toEqual({ ok: false, enforced: false });
   });
 
   it("aceita assinatura válida", () => {

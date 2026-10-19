@@ -14,7 +14,7 @@ const text = (value: unknown) => typeof value === "string" || typeof value === "
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ webhookId: string }> }) {
   const { webhookId } = await params;
-  const denied = guardWebhook(req, "inbound", webhookId);
+  const denied = await guardWebhook(req, "inbound", webhookId);
   if (denied) return denied;
   const webhook = await prisma.inboundWebhook.findUnique({ where: { id: webhookId } });
   if (!webhook || !webhook.enabled) return NextResponse.json({ ok: false }, { status: 404 });

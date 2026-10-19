@@ -35,7 +35,7 @@ function phoneFromJid(remoteJid: string): string {
 export async function POST(req: NextRequest, { params }: { params: Promise<{ connectionId: string }> }) {
   const { connectionId } = await params;
 
-  const denied = guardWebhook(req, "evolution", connectionId);
+  const denied = await guardWebhook(req, "evolution", connectionId);
   if (denied) return denied;
 
   const connection = await prisma.connection.findUnique({ where: { id: connectionId } });

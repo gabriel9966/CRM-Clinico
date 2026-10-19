@@ -1,7 +1,8 @@
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
 import { resolveOrgByMcpApiKey } from "./mcp-config";
-import { clientIp, rateLimit } from "./rate-limit";
+import { clientIp } from "./rate-limit";
+import { sharedRateLimit } from "./shared-rate-limit";
 import { AppError } from "./errors";
 
 // Autenticação da API REST pública (/api/v1/*): mesma chave usada no MCP
@@ -33,13 +34,13 @@ export async function withApiAuth(
   // Limite por IP antes de consultar o banco: barra tentativa de adivinhar
   // chaves. Depois de autenticado, limite por organização.
   const ip = clientIp(req.headers);
-  const ipLimit = rateLimit(`api:ip:${ip}`, { limit: 300, windowMs: 60_000 });
+  const ipLimit = await sharedRateLimit(`api:ip:${ip}`, { limit: 300, windowMs: 60_000 });
   if (!ipLimit.ok) return rateLimited(ipLimit.retryAfterSec);
 
   const organizationId = await resolveApiOrg(req);
   if (!organizationId) return apiError("unauthorized", 401);
 
-  const orgLimit = rateLimit(`api:org:${organizationId}`, { limit: 600, windowMs: 60_000 });
+  const orgLimit = await sharedRateLimit(`api:org:${organizationId}`, { limit: 600, windowMs: 60_000 });
   if (!orgLimit.ok) return rateLimited(orgLimit.retryAfterSec);
   try {
     return await handler(organizationId);

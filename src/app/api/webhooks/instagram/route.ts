@@ -3,7 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { decryptJson } from "@/lib/crypto";
 import { triggerAutomations } from "@/lib/automation/engine";
 import { assignNextOwner } from "@/lib/assignment";
-import { clientIp, rateLimit } from "@/lib/rate-limit";
+import { clientIp } from "@/lib/rate-limit";
+import { sharedRateLimit } from "@/lib/shared-rate-limit";
 import { verifyMetaSignature } from "@/lib/webhook-auth";
 import { ensureLiveContact } from "@/lib/inbound";
 import { createMessage } from "@/lib/messages";
@@ -40,7 +41,7 @@ type InstagramWebhookBody = {
 };
 
 export async function POST(req: NextRequest) {
-  const rl = rateLimit(`webhook:instagram:${clientIp(req.headers)}`, { limit: 600, windowMs: 60_000 });
+  const rl = await sharedRateLimit(`webhook:instagram:${clientIp(req.headers)}`, { limit: 600, windowMs: 60_000 });
   if (!rl.ok) {
     return NextResponse.json({ ok: false }, { status: 429, headers: { "Retry-After": String(rl.retryAfterSec) } });
   }
@@ -51,6 +52,7 @@ export async function POST(req: NextRequest) {
   const rawBody = await req.text();
   const sig = verifyMetaSignature(rawBody, req.headers.get("x-hub-signature-256"), process.env.INSTAGRAM_APP_SECRET);
   if (!sig.ok) {
+    if (!sig.enforced) console.error("[instagram] INSTAGRAM_APP_SECRET não configurado; webhook recusado.");
     return NextResponse.json({ ok: false, error: "invalid_signature" }, { status: 401 });
   }
 

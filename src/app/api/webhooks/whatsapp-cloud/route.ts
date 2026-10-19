@@ -8,7 +8,8 @@ import { triggerAutomations } from "@/lib/automation/engine";
 import { logWebhook } from "@/lib/webhook-log";
 import { markCampaignDelivery, markCampaignResponse } from "@/lib/campaigns";
 import { ensureLiveContact } from "@/lib/inbound";
-import { clientIp, rateLimit } from "@/lib/rate-limit";
+import { clientIp } from "@/lib/rate-limit";
+import { sharedRateLimit } from "@/lib/shared-rate-limit";
 
 type CloudConfig = { phoneNumberId: string; verifyToken?: string };
 type CloudBody = { entry?: Array<{ changes?: Array<{ field?: string; value?: { metadata?: { phone_number_id?: string }; contacts?: Array<{ wa_id?: string; profile?: { name?: string } }>; messages?: Array<{ id?: string; from?: string; text?: { body?: string }; timestamp?: string; type?: string }>; statuses?: Array<{ id?: string; status?: string }> } }> }> };
@@ -25,10 +26,10 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   // Limite por origem, como nos demais webhooks públicos (este não tem id na URL).
-  const rl = rateLimit(`webhook:whatsapp-cloud:${clientIp(req.headers)}`, { limit: 600, windowMs: 60_000 });
+  const rl = await sharedRateLimit(`webhook:whatsapp-cloud:${clientIp(req.headers)}`, { limit: 600, windowMs: 60_000 });
   if (!rl.ok) return NextResponse.json({ ok: false }, { status: 429, headers: { "Retry-After": String(rl.retryAfterSec) } });
   const raw = await req.text();
-  const signature = verifyMetaSignature(raw, req.headers.get("x-hub-signature-256"), process.env.WHATSAPP_CLOUD_APP_SECRET || process.env.INSTAGRAM_APP_SECRET);
+  const signature = verifyMetaSignature(raw, req.headers.get("x-hub-signature-256"), process.env.WHATSAPP_CLOUD_APP_SECRET);
   if (!signature.ok) return NextResponse.json({ ok: false, error: "invalid_signature" }, { status: 401 });
   let body: CloudBody;
   try { body = JSON.parse(raw); } catch { return NextResponse.json({ ok: false }, { status: 400 }); }
