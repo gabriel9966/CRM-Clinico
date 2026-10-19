@@ -248,6 +248,7 @@ function decodeCursor(cursor: string): { t: Date; id: string } | null {
 }
 
 export type ConversationQuery = {
+  conversationId?: string;
   restrictToOwnerId?: string;
   q?: string;
   cursor?: string;
@@ -279,6 +280,7 @@ export async function getConversationsPage(organizationId: string, query: Conver
   // restrição do atendente comum (ver o ownerId abaixo), e dois filtros sobre
   // `contact` (tag + busca) se apagavam. Com AND a restrição é inviolável.
   const clauses: Prisma.ConversationWhereInput[] = [{ organizationId }];
+  if (query.conversationId) clauses.push({ id: query.conversationId });
   if (query.restrictToOwnerId) clauses.push({ ownerId: query.restrictToOwnerId }); // sempre vale
   if (query.ownerId === "unassigned") clauses.push({ ownerId: null });
   else if (query.ownerId) clauses.push({ ownerId: query.ownerId });
@@ -290,7 +292,7 @@ export async function getConversationsPage(organizationId: string, query: Conver
   if (query.tag) clauses.push({ contact: { tags: { contains: JSON.stringify(query.tag) } } });
   if (query.stageId) clauses.push({ contact: { opportunities: { some: { stageId: query.stageId, deletedAt: null } } } });
   if (q) clauses.push({ contact: contactSearchWhere(q) });
-  clauses.push({ lastMessageAt: { not: null, ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } });
+  if (!query.conversationId) clauses.push({ lastMessageAt: { not: null, ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } });
 
   let nextCursor: string | null = null;
   const cur = query.cursor ? decodeCursor(query.cursor) : null;

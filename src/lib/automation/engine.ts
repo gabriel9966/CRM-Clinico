@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { mcpCreateContact, mcpCreateOpportunity, mcpMoveOpportunityStage, mcpSendMessage } from "@/lib/mcp-tools";
 import { recordStageChange } from "@/lib/pipeline-history";
 import { syncTags } from "@/lib/crm-catalog";
+import { postOutboundWebhook } from "@/lib/outbound-webhook";
 import { runCode } from "./sandbox";
 import type { Flow, FlowNode, NodeData } from "./types";
 
@@ -151,12 +152,8 @@ async function runActionNode(node: Extract<NodeData, { kind: "action" }>, ctx: R
     case "webhook": {
       if (!config.url) return { ok: false, reason: "sem url" };
       try {
-        const response = await fetch(String(config.url), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ contactId: ctx.contactId, opportunityId: ctx.opportunityId, firedAt: new Date().toISOString() }),
-        });
-        return response.ok ? { ok: true } : { ok: false, reason: `webhook retornou HTTP ${response.status}` };
+        const status = await postOutboundWebhook(String(config.url), { contactId: ctx.contactId, opportunityId: ctx.opportunityId, payload: ctx.payload, firedAt: new Date().toISOString() });
+        return status >= 200 && status < 300 ? { ok: true } : { ok: false, reason: `webhook retornou HTTP ${status}` };
       } catch (err) {
         return { ok: false, reason: err instanceof Error ? err.message : "falha no webhook" };
       }
@@ -254,8 +251,11 @@ async function evaluateCondition(data: Extract<NodeData, { kind: "condition" }>,
 
 async function executeFrom(flow: Flow, runId: string, startNodeId: string, ctx: RunContext) {
   let nodeId: string | undefined = startNodeId;
+  const visited = new Set<string>();
 
   while (nodeId) {
+    if (visited.has(nodeId) || visited.size >= 200) throw new Error("Ciclo ou limite de blocos atingido na execução.");
+    visited.add(nodeId);
     const node: FlowNode | undefined = flow.nodes.find((n) => n.id === nodeId);
     if (!node) break;
 

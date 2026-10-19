@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import Link from "next/link";
 import { loginAction, type LoginState } from "./actions";
 
 const initialState: LoginState = {};
@@ -58,6 +59,7 @@ export default function LoginPage() {
           </button>
         </form>
 
+        <p className="mt-6 text-center text-xs"><Link href="/forgot-password">Esqueci minha senha</Link></p>
         <p className="mt-6 text-center text-xs text-[var(--text-faint)]">
           Use as credenciais criadas pelo administrador da equipe.
         </p>

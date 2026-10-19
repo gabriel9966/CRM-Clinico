@@ -10,6 +10,7 @@ export type EmailConfig = {
 // nada, só confirma que a key é válida antes de salvar a conexão.
 export async function verifyConfig(config: EmailConfig) {
   const res = await fetch("https://api.resend.com/domains", {
+    signal: AbortSignal.timeout(20_000),
     headers: { Authorization: `Bearer ${config.apiKey}` },
     cache: "no-store",
   });
@@ -22,6 +23,7 @@ export async function verifyConfig(config: EmailConfig) {
 export async function sendText(config: EmailConfig, to: string, text: string, subject?: string) {
   const from = config.fromName ? `${config.fromName} <${config.fromAddress}>` : config.fromAddress;
   const res = await fetch("https://api.resend.com/emails", {
+    signal: AbortSignal.timeout(20_000),
     method: "POST",
     headers: {
       Authorization: `Bearer ${config.apiKey}`,

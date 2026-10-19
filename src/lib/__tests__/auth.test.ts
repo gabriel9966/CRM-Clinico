@@ -79,6 +79,15 @@ describe("requireAdminPage (páginas)", () => {
 });
 
 describe("requireOrgUser", () => {
+  it("bloqueia a sessão de usuário desativado", async () => {
+    loggedAs("MEMBER", { isActive: false });
+    await expect(requireOrgUser()).rejects.toThrow("REDIRECT:/api/session/clear");
+  });
+  it("revoga uma sessão anterior à alteração de senha", async () => {
+    loggedAs("MEMBER", { sessionVersion: 2 });
+    vi.mocked(readSession).mockResolvedValue({ userId: "u1", sessionVersion: 1 });
+    await expect(requireOrgUser()).rejects.toThrow("REDIRECT:/api/session/clear");
+  });
   it("atendente comum continua podendo usar o CRM normal", async () => {
     loggedAs("MEMBER");
     await expect(requireOrgUser()).resolves.toMatchObject({ role: "MEMBER" });

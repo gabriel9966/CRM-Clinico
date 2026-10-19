@@ -17,6 +17,7 @@ async function hasValidSession(req: NextRequest) {
 
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
+  if (pathname === "/forgot-password" || pathname === "/reset-password") return NextResponse.next();
   const isLoggedIn = await hasValidSession(req);
 
   if (pathname.startsWith("/login")) {

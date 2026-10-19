@@ -11,6 +11,7 @@ export async function getCurrentUser() {
   const user = await prisma.user.findUnique({ where: { id: session.userId }, include: { organization: true } });
   if (!user) return null;
   if (user.isActive === false) return null;
+  if ((session.sessionVersion ?? 0) !== (user.sessionVersion ?? 0)) return null;
 
   return user;
 }

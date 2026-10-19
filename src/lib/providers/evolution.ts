@@ -19,6 +19,7 @@ async function evoFetch(config: EvolutionConfig, path: string, init: RequestInit
   const url = `${config.baseUrl.replace(/\/+$/, "")}${path}`;
   const res = await fetch(url, {
     ...init,
+    signal: init.signal ?? AbortSignal.timeout(20_000),
     headers: {
       "Content-Type": "application/json",
       apikey: config.apiKey,

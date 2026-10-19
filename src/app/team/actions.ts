@@ -92,8 +92,11 @@ export async function updateTeamMemberAccess(id: string, input: TeamAccessInput)
 // Membro inativo (ex: de férias) sai do rodízio de atribuição automática
 // (ver assignNextOwner em lib/assignment.ts) sem precisar excluir a conta.
 export async function toggleTeamMemberActive(id: string, isActive: boolean) {
-  const { organizationId } = await requireAdminUser();
-  await prisma.user.updateMany({ where: { id, organizationId }, data: { isActive } });
+  const current = await requireAdminUser();
+  const { organizationId } = current;
+  if (current.id === id && !isActive) throw new Error("Outro administrador deve desativar seu acesso.");
+  await prisma.user.updateMany({ where: { id, organizationId }, data: { isActive, ...(!isActive ? { sessionVersion: { increment: 1 } } : {}) } });
+  await audit(organizationId, { action: isActive ? "team.activated" : "team.deactivated", entity: "User", entityId: id, ...actorOf(current) });
   revalidatePath("/team");
 }
 

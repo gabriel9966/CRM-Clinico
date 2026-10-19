@@ -8,10 +8,11 @@ const SESSION_DURATION_SECONDS = 60 * 60 * 24 * 30; // 30 days
 
 export type SessionPayload = {
   userId: string;
+  sessionVersion?: number;
 };
 
-export async function createSession(userId: string) {
-  const token = await new SignJWT({ userId } satisfies SessionPayload)
+export async function createSession(userId: string, sessionVersion = 0) {
+  const token = await new SignJWT({ userId, sessionVersion } satisfies SessionPayload)
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(`${SESSION_DURATION_SECONDS}s`)
@@ -39,7 +40,7 @@ export async function readSession(): Promise<SessionPayload | null> {
   try {
     const { payload } = await jwtVerify(token, secret);
     if (typeof payload.userId !== "string") return null;
-    return { userId: payload.userId };
+    return { userId: payload.userId, sessionVersion: typeof payload.sessionVersion === "number" ? payload.sessionVersion : 0 };
   } catch {
     return null;
   }

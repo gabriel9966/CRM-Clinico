@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { OfficialTemplateDialog } from "./OfficialTemplateDialog";
+import { NewConversationDialog } from "./NewConversationDialog";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Icon } from "@/components/icons";
 import { colorFor, initials, timeAgo, fmtDate, fmtMoney, fmtTime } from "@/lib/format";
@@ -132,6 +133,7 @@ export function ConversationsView({
   const [windowNow, setWindowNow] = useState(() => Date.now());
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [officialTemplateOpen, setOfficialTemplateOpen] = useState(false);
+  const [newConversationOpen, setNewConversationOpen] = useState(false);
   const [manageTemplatesOpen, setManageTemplatesOpen] = useState(false);
   const [customerPanelOpen, setCustomerPanelOpen] = useState(false);
   const [customerDetail, setCustomerDetail] = useState<CustomerDetail | null>(null);
@@ -507,6 +509,8 @@ export function ConversationsView({
         </div>
       </div>
       <div className="content">
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}><button type="button" className="btn primary" onClick={() => setNewConversationOpen(true)}><Icon.plus /> Novo atendimento</button></div>
+        {newConversationOpen && <NewConversationDialog connections={connections} onClose={() => setNewConversationOpen(false)} />}
         <div className="convo-layout">
           <div className="convo-list">
             <div className="search-bar" style={{ margin: 8 }}>

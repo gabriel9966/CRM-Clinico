@@ -36,6 +36,16 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("permissões e etapas (PostgreSQ
     expect(account.accessConfigured).toBe(true);
     expect(account.permissions).toBe("[]");
   });
+  it("recuperação usa token de uso único e revoga sessões", async () => {
+    const { issuePasswordReset, consumePasswordReset } = await import("@/lib/password-recovery");
+    const token = await issuePasswordReset(user);
+    const saved = await db.passwordResetToken.findFirstOrThrow({ where: { userId: user } });
+    expect(saved.tokenHash).not.toBe(token);
+    const results = await Promise.allSettled([consumePasswordReset(token, "uma-senha-longa-segura"), consumePasswordReset(token, "outra-senha-longa-segura")]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect((await db.user.findUniqueOrThrow({ where: { id: user } })).sessionVersion).toBe(1);
+    expect(await db.passwordResetToken.count({ where: { userId: user } })).toBe(0);
+  });
   it("a ficha do contato respeita pipelines e instâncias", async () => {
     const { getContactDetail } = await import("@/lib/queries");
     const detail = await getContactDetail(org, { id: user, role: "MEMBER", pipelineIds: [visiblePipeline], connectionIds: [visibleConnection], canReadMessages: true }, contact);

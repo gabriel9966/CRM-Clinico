@@ -116,7 +116,7 @@ export function Sidebar({
         <span className="avatar" style={{ background: userColor, width: 26, height: 26, fontSize: 11 }}>
           {initials(userName)}
         </span>
-        <span style={{ flex: 1, fontSize: 12, fontWeight: 600, color: "var(--sidebar-heading)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{userName}</span>
+        <Link href="/account" title="Minha conta" style={{ flex: 1, fontSize: 12, fontWeight: 600, color: "var(--sidebar-heading)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{userName}</Link>
         <form action={logoutAction}>
           <button type="submit">Sair</button>
         </form>

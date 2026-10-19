@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { requireAdminUser } from "@/lib/auth";
 import type { Flow } from "@/lib/automation/types";
 import { TRIGGER_LABEL } from "@/lib/automation/types";
+import { validateFlow } from "@/lib/automation/validate-flow";
 import { actorOf, audit } from "@/lib/audit";
 
 function initialFlow(triggerLabel: string): Flow {
@@ -25,9 +26,11 @@ function initialFlow(triggerLabel: string): Flow {
 export async function createAutomation(name: string, trigger: string) {
   const user = await requireAdminUser();
   const { organizationId } = user;
+  if (!Object.hasOwn(TRIGGER_LABEL, trigger)) throw new Error("Gatilho inválido.");
   const automation = await prisma.automation.create({
     data: {
       organizationId,
+      enabled: false,
       name: name.trim() || "Nova automação",
       trigger: trigger as never,
       flow: JSON.stringify(initialFlow(trigger)),
@@ -110,6 +113,11 @@ export async function renameAutomation(id: string, name: string) {
 export async function toggleAutomation(id: string, enabled: boolean) {
   const user = await requireAdminUser();
   const { organizationId } = user;
+  if (enabled) {
+    const automation = await prisma.automation.findFirst({ where: { id, organizationId } });
+    if (!automation) throw new Error("Automação não encontrada.");
+    validateFlow(JSON.parse(automation.flow), true);
+  }
   const updated = await prisma.automation.updateMany({ where: { id, organizationId }, data: { enabled } });
   if (updated.count) await audit(organizationId, { action: enabled ? "automation.enabled" : "automation.disabled", entity: "Automation", entityId: id, ...actorOf(user) });
   revalidatePath("/automations");
@@ -126,6 +134,7 @@ export async function updateTriggerConfig(id: string, triggerConfig: Record<stri
 export async function saveFlow(id: string, flow: Flow, trigger: string, triggerConfig: Record<string, unknown>) {
   const user = await requireAdminUser();
   const { organizationId } = user;
+  validateFlow(flow);
   if (!Object.hasOwn(TRIGGER_LABEL, trigger)) throw new Error("Gatilho inválido");
   const current = await prisma.automation.findFirst({ where: { id, organizationId }, select: { trigger: true } });
   if (!current) throw new Error("Automação não encontrada");

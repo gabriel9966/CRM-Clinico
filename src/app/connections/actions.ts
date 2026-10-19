@@ -108,7 +108,7 @@ export async function createWhatsAppConnection(
 export async function refreshWhatsAppQr(connectionId: string): Promise<{ qrcode?: string; error?: string }> {
   const { organizationId } = await requireAdminUser();
   const connection = await prisma.connection.findFirst({ where: { id: connectionId, organizationId } });
-  if (!connection) return { error: "Conexão não encontrada." };
+  if (!connection || connection.provider !== "WHATSAPP_EVOLUTION") return { error: "Instância Evolution não encontrada." };
   const config = decryptJson<evolution.EvolutionConfig>(connection.config);
   try {
     const res = await evolution.getConnect(config);

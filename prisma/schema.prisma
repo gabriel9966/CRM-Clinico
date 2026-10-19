@@ -73,6 +73,7 @@ model User {
   name         String
   email        String   @unique
   passwordHash String
+  sessionVersion Int @default(0)
   color        String   @default("#4f46e5")
   team         String   @default("Geral")
   role         Role     @default(MEMBER)
@@ -101,12 +102,23 @@ model User {
   googleAccount      GoogleAccount?
   pipelineAccesses   UserPipelineAccess[]
   connectionAccesses UserConnectionAccess[]
+  passwordResetTokens PasswordResetToken[]
 
   @@index([organizationId])
 }
 
 // Configuração da integração MCP de UMA organização (chave de API exibida/
 // gerenciada pela tela "Integração MCP").
+model PasswordResetToken {
+  id String @id @default(cuid())
+  tokenHash String @unique
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  @@index([userId])
+}
+
 model McpConfig {
   id        String   @id @default(cuid())
   apiKey    String // criptografado
@@ -988,6 +1000,8 @@ enum CampaignRecipientStatus {
 // Assim, uma alteração posterior da lista não muda um disparo já planejado
 // nem permite que o mesmo contato seja enviado duas vezes na mesma campanha.
 model Campaign {
+  processingToken String?
+  processingUntil DateTime?
   id          String         @id @default(cuid())
   name        String
   body        String

@@ -7,6 +7,7 @@ export async function sendText(config: WhatsAppCloudConfig, destination: string,
   const version = config.apiVersion || "v23.0";
   const response = await fetch(`https://graph.facebook.com/${version}/${config.phoneNumberId}/messages`, {
     method: "POST",
+    signal: AbortSignal.timeout(20_000),
     headers: { Authorization: `Bearer ${config.accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({ messaging_product: "whatsapp", to, type: "text", text: { body: text, preview_url: false } }),
   });
@@ -20,6 +21,7 @@ export async function sendTemplate(config: WhatsAppCloudConfig, destination: str
   const version = config.apiVersion || "v23.0";
   const response = await fetch(`https://graph.facebook.com/${version}/${config.phoneNumberId}/messages`, {
     method: "POST",
+    signal: AbortSignal.timeout(20_000),
     headers: { Authorization: `Bearer ${config.accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({ messaging_product: "whatsapp", to, type: "template", template: { name, language: { code: language }, ...(bodyParameters.length ? { components: [{ type: "body", parameters: bodyParameters.map((text) => ({ type: "text", text })) }] } : {}) } }),
   });
@@ -29,6 +31,6 @@ export async function sendTemplate(config: WhatsAppCloudConfig, destination: str
 
 export async function verifyConfig(config: WhatsAppCloudConfig) {
   const version = config.apiVersion || "v23.0";
-  const response = await fetch(`https://graph.facebook.com/${version}/${config.phoneNumberId}`, { headers: { Authorization: `Bearer ${config.accessToken}` } });
+  const response = await fetch(`https://graph.facebook.com/${version}/${config.phoneNumberId}`, { signal: AbortSignal.timeout(20_000), headers: { Authorization: `Bearer ${config.accessToken}` } });
   if (!response.ok) throw new Error(`Não foi possível validar a Cloud API: ${(await response.text()).slice(0, 500)}`);
 }

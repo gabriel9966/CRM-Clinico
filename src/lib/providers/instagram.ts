@@ -8,6 +8,7 @@ export type InstagramConfig = {
 export async function sendText(config: InstagramConfig, recipientId: string, text: string) {
   const res = await fetch(`https://graph.facebook.com/v19.0/me/messages?access_token=${encodeURIComponent(config.accessToken)}`, {
     method: "POST",
+    signal: AbortSignal.timeout(20_000),
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       recipient: { id: recipientId },

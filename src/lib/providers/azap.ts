@@ -7,6 +7,7 @@ export type AzapConfig = { sendUrl: string; apiKey: string; instanceName?: strin
 export async function sendText(config: AzapConfig, destination: string, text: string) {
   const response = await fetch(config.sendUrl, {
     method: "POST",
+    signal: AbortSignal.timeout(20_000),
     headers: { Authorization: `Bearer ${config.apiKey}`, "Content-Type": "application/json", "X-API-Key": config.apiKey },
     body: JSON.stringify({ phone: destination.replace(/\D/g, ""), number: destination.replace(/\D/g, ""), text, message: text, instance: config.instanceName }),
   });

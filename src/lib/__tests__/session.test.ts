@@ -22,7 +22,7 @@ describe("session (JWT em cookie)", () => {
   it("createSession + readSession faz o round-trip do userId", async () => {
     await createSession("user-123");
     const session = await readSession();
-    expect(session).toEqual({ userId: "user-123" });
+    expect(session).toEqual({ userId: "user-123", sessionVersion: 0 });
   });
 
   it("readSession retorna null sem cookie", async () => {

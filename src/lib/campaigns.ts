@@ -1,4 +1,5 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 
 import { prisma } from "@/lib/prisma";
 import { createMessage } from "@/lib/messages";
@@ -81,6 +82,14 @@ export async function prepareCampaignRecipients(campaignId: string) {
 
 /** Executa um lote. O lock por destinatário (PENDING -> SENDING) evita duplicidade entre workers. */
 export async function processCampaign(campaignId: string) {
+  const token = randomUUID();
+  const claim = await prisma.campaign.updateMany({ where: { id: campaignId, status: "RUNNING", OR: [{ processingUntil: null }, { processingUntil: { lt: new Date() } }] }, data: { processingToken: token, processingUntil: new Date(Date.now() + 120_000) } });
+  if (!claim.count) return { processed: 0, done: false };
+  try { return await processCampaignBatch(campaignId, token); }
+  finally { await prisma.campaign.updateMany({ where: { id: campaignId, processingToken: token }, data: { processingToken: null, processingUntil: null } }); }
+}
+
+async function processCampaignBatch(campaignId: string, token: string) {
   const campaign = await prisma.campaign.findUnique({
     where: { id: campaignId },
     include: { connection: true, template: true, organization: { select: { timezone: true } } },
@@ -95,6 +104,7 @@ export async function processCampaign(campaignId: string) {
     await prisma.campaign.update({ where: { id: campaign.id }, data: { nextRunAt: new Date(Date.now() + 60 * 60_000) } });
     return { processed: 0, done: false, waiting: "Fora da janela de envio configurada." };
   }
+  let remainingDaily = campaign.batchSize;
   if (campaign.dailyLimit > 0) {
     const sentLast24h = await prisma.campaignRecipient.count({
       where: { campaignId, sentAt: { gte: new Date(Date.now() - 24 * 60 * 60_000) }, status: { in: ["SENT", "DELIVERED", "READ", "RESPONDED"] } },
@@ -103,12 +113,13 @@ export async function processCampaign(campaignId: string) {
       await prisma.campaign.update({ where: { id: campaign.id }, data: { nextRunAt: new Date(Date.now() + 60 * 60_000) } });
       return { processed: 0, done: false, waiting: "Limite de envio das últimas 24 horas atingido." };
     }
+    remainingDaily = Math.min(remainingDaily, campaign.dailyLimit - sentLast24h);
   }
 
   const recipients = await prisma.campaignRecipient.findMany({
     where: { campaignId, status: "PENDING" },
     include: { contact: { select: { id: true, name: true, company: true, phone: true, marketingOptOut: true } } },
-    take: campaign.batchSize,
+    take: remainingDaily,
     orderBy: { id: "asc" },
   });
   const now = new Date();
@@ -116,6 +127,10 @@ export async function processCampaign(campaignId: string) {
   let processed = 0;
 
   for (const recipient of recipients) {
+    // Pause/cancel is checked between recipients; a lease prevents two workers
+    // from exceeding the configured batch and daily limits concurrently.
+    const lease = await prisma.campaign.updateMany({ where: { id: campaignId, status: "RUNNING", processingToken: token }, data: { processingUntil: new Date(Date.now() + 120_000) } });
+    if (!lease.count) return { processed, done: false };
     const claimed = await prisma.campaignRecipient.updateMany({ where: { id: recipient.id, status: "PENDING" }, data: { status: "SENDING", attemptedAt: now } });
     if (claimed.count === 0) continue;
     processed++;
@@ -130,8 +145,9 @@ export async function processCampaign(campaignId: string) {
       },
       select: { id: true },
     });
-    if (recipient.contact.marketingOptOut || !number || alreadyContacted) {
-      await prisma.campaignRecipient.update({ where: { id: recipient.id }, data: { status: "SKIPPED", skippedAt: new Date(), failureReason: recipient.contact.marketingOptOut ? "Contato bloqueou comunicações." : !number ? "Contato sem telefone válido." : "Contato recebeu campanha recente nesta instância." } });
+    const currentContact = await prisma.contact.findFirst({ where: { id: recipient.contactId, organizationId: campaign.organizationId }, select: { marketingOptOut: true } });
+    if (!currentContact || currentContact.marketingOptOut || !number || alreadyContacted) {
+      await prisma.campaignRecipient.update({ where: { id: recipient.id }, data: { status: "SKIPPED", skippedAt: new Date(), failureReason: !currentContact ? "Contato removido." : currentContact.marketingOptOut ? "Contato bloqueou comunicações." : !number ? "Contato sem telefone válido." : "Contato recebeu campanha recente nesta instância." } });
       continue;
     }
     const text = render(campaign.body, recipient.contact);
@@ -146,8 +162,8 @@ export async function processCampaign(campaignId: string) {
   }
 
   const remaining = await prisma.campaignRecipient.count({ where: { campaignId, status: "PENDING" } });
-  await prisma.campaign.update({
-    where: { id: campaignId },
+  await prisma.campaign.updateMany({
+    where: { id: campaignId, status: "RUNNING", processingToken: token },
     data: remaining === 0 ? { status: "COMPLETED", completedAt: new Date(), nextRunAt: null } : { nextRunAt: new Date(Date.now() + campaign.intervalMinutes * 60_000) },
   });
   return { processed, done: remaining === 0 };
@@ -156,6 +172,7 @@ export async function processCampaign(campaignId: string) {
 /** Varre campanhas agendadas e lotes vencidos; chamado pela instrumentação do app. */
 export async function processDueCampaigns() {
   const now = new Date();
+  await prisma.campaignRecipient.updateMany({ where: { status: "SENDING", attemptedAt: { lt: new Date(now.getTime() - 10 * 60_000) }, campaign: { OR: [{ processingUntil: null }, { processingUntil: { lt: now } }] } }, data: { status: "FAILED", failedAt: now, failureReason: "Envio interrompido; confirme com o provedor antes de reenviar para evitar duplicidade." } });
   await prisma.campaign.updateMany({ where: { status: "SCHEDULED", scheduledAt: { lte: now } }, data: { status: "RUNNING", startedAt: now, nextRunAt: now } });
   const due = await prisma.campaign.findMany({ where: { status: "RUNNING", OR: [{ nextRunAt: null }, { nextRunAt: { lte: now } }] }, select: { id: true } });
   for (const campaign of due) await processCampaign(campaign.id);

@@ -26,3 +26,15 @@ services:
       CONNECTIONS_SECRET: test-connections-secret-not-for-production-use
       SESSION_SECRET: test-session-secret-not-for-production-use-long-enough
     command: ["sh", "-c", "npx prisma migrate deploy && npm test"]
+  browser:
+    build:
+      context: .
+      target: builder
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://crm_validation:validation_only@database:5432/crm_validation
+      CONNECTIONS_SECRET: test-connections-secret-not-for-production-use
+      SESSION_SECRET: test-session-secret-not-for-production-use-long-enough
+    command: ["sh", "-c", "npx prisma migrate deploy && npx playwright install --with-deps chromium && node scripts/smoke.mjs"]

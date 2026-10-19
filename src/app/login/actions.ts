@@ -49,6 +49,6 @@ export async function loginAction(
   }
 
   clearRateLimit(emailKey);
-  await createSession(user.id);
+  await createSession(user.id, user.sessionVersion);
   redirect(user.isSuperAdmin ? "/admin" : "/dashboard");
 }

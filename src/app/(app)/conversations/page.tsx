@@ -2,16 +2,18 @@ import { getConnections, getPipelines, getTeamMembers, getMessageTemplates } fro
 import { listTags } from "@/lib/crm-catalog";
 import { getConversationMessagesPage, getConversationsPage } from "@/lib/queries";
 import { requireOrgUser } from "@/lib/auth";
-import { allowedConnectionIds, hasModulePermission } from "@/lib/access";
+import { allowedConnectionIds, allowedPipelineIds, hasModulePermission } from "@/lib/access";
 import { getSendOptions } from "@/lib/messaging";
 import { listAiAgentOptions } from "@/lib/ai/queries";
 import { ConversationsView } from "@/components/conversations/ConversationsView";
 
-export default async function ConversationsPage() {
+export default async function ConversationsPage({ searchParams }: { searchParams: Promise<{ conversation?: string }> }) {
   const user = await requireOrgUser();
   const connectionAccessIds = await allowedConnectionIds(user);
   const sendConnectionAccessIds = await allowedConnectionIds(user, "send");
   const canReadConversations = hasModulePermission(user, "conversations.read");
+  const { conversation } = await searchParams;
+  const pipelineIds = hasModulePermission(user, "pipeline.read") ? await allowedPipelineIds(user) : [];
 
   // Permissão: ADMIN vê todas as conversas da empresa; MEMBER só vê as dos
   // contatos atribuídos a ele(a) — evita que um atendente leia a conversa
@@ -20,16 +22,20 @@ export default async function ConversationsPage() {
     canReadConversations ? getConversationsPage(user.organizationId, { restrictToOwnerId: hasModulePermission(user, "conversations.manage") ? undefined : user.id, allowedConnectionIds: connectionAccessIds ?? undefined }) : Promise.resolve({ items: [], nextCursor: null, total: 0 }),
     getTeamMembers(user.organizationId),
     getMessageTemplates(user.organizationId),
-    getPipelines(user.organizationId),
+    getPipelines(user.organizationId).then((items) => pipelineIds ? items.filter((item) => pipelineIds.includes(item.id)) : items),
     getConnections(user.organizationId).then((items) => connectionAccessIds === null ? items : items.filter((item) => connectionAccessIds.includes(item.id))),
     listTags(user.organizationId, "contact"),
   ]);
+  if (conversation && canReadConversations) {
+    const requested = await getConversationsPage(user.organizationId, { conversationId: conversation.slice(0, 100), restrictToOwnerId: hasModulePermission(user, "conversations.manage") ? undefined : user.id, allowedConnectionIds: connectionAccessIds ?? undefined });
+    if (requested.items[0]) page.items = [requested.items[0], ...page.items.filter((item) => item.id !== conversation)];
+  }
 
   // Só a primeira página da lista e as mensagens da primeira conversa vêm do
   // servidor; o resto é carregado sob demanda.
   const firstId = page.items[0]?.id;
   const [firstThread, firstSendOptions] = await Promise.all([
-    firstId ? getConversationMessagesPage(user.organizationId, { id: user.id, role: user.role }, firstId) : Promise.resolve(null),
+    firstId ? getConversationMessagesPage(user.organizationId, { id: user.id, role: hasModulePermission(user, "conversations.manage") ? "ADMIN" : user.role }, firstId) : Promise.resolve(null),
     firstId
       ? getSendOptions(user.organizationId, page.items[0]!.contact.id).then((options) => options.filter((option) =>
         (sendConnectionAccessIds === null || sendConnectionAccessIds.includes(option.connectionId)) &&
@@ -42,6 +48,7 @@ export default async function ConversationsPage() {
 
   return (
     <ConversationsView
+      key={conversation ?? "inbox"}
       aiEnabled={aiEnabled}
       initialPage={page}
       initialThread={firstThread}

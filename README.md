@@ -87,4 +87,16 @@ Redefinir a senha de um usuário: `npx tsx prisma/reset-password.ts email@exempl
 
 ## Deploy (Docker)
 
-`docker compose up -d --build app` — o `docker-entrypoint.sh` aplica as migrations, roda o seed (só se o banco estiver vazio) e sobe o app. Variáveis em `.env` (veja `.env.production.example`).
+`docker compose up -d --build app worker` — o `docker-entrypoint.sh` aplica as migrations, roda o seed (só se o banco estiver vazio) e sobe o app. O worker separado processa esperas, gatilhos de agenda e campanhas. Variáveis em `.env` (veja `.env.production.example`). O app só passa no health check quando o banco responde.
+
+## Validação isolada
+
+`docker compose -p novacrm-validation -f compose.validation.yml run --build --rm checks` cria PostgreSQL descartável e executa migrations e todos os testes de integração. Não usa o banco de produção.
+
+`docker compose -p novacrm-validation -f compose.validation.yml run --build --rm browser` instala Chromium no contêiner e valida navegação, permissões, notas privadas, templates oficiais e layout desktop/mobile. O script recusa bancos diferentes de `crm_validation`.
+
+## Acesso e recuperação
+
+Novos membros começam sem módulos, pipelines ou instâncias liberados. Usuários desativados não podem entrar. Minha conta permite alterar nome e senha; alterações de senha revogam sessões anteriores.
+
+Recuperação por e-mail exige `APP_BASE_URL` e uma conexão EMAIL ativa da organização. Os tokens são guardados por hash, expiram em 30 minutos e funcionam uma vez. A mensagem pública não revela se um endereço possui conta.

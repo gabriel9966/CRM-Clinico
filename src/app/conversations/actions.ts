@@ -29,6 +29,23 @@ export async function fetchSendOptions(contactId: string): Promise<SendOptionDTO
   return checks.filter((item) => item.allowed).map((item) => item.option);
 }
 
+export async function startConversation(contactId: string, connectionId: string) {
+  const user = await requireOrgUser();
+  if (!hasModulePermission(user, "conversations.read") || !(await canTalkTo(user, contactId)) || !(await canAccessConnection(user, connectionId, "send"))) return { error: "Você não tem permissão para iniciar este atendimento." };
+  const option = (await getSendOptions(user.organizationId, contactId)).find((item) => item.connectionId === connectionId);
+  if (!option?.connected) return { error: "Esta instância está desconectada ou não pode conversar com o contato. Confira telefone/e-mail. No Instagram, aguarde a primeira mensagem do cliente." };
+  const existing = await prisma.conversation.findUnique({ where: { contactId_connectionId: { contactId, connectionId } } });
+  if (existing && !await getConversationForUser(user, existing.id)) return { error: "Este atendimento pertence a outro responsável. Solicite a transferência." };
+  const conversation = existing ?? await prisma.conversation.upsert({
+    where: { contactId_connectionId: { contactId, connectionId } },
+    create: { organizationId: user.organizationId, contactId, connectionId, ownerId: user.id },
+    update: {},
+  });
+  await audit(user.organizationId, { action: "conversation.started", entity: "Conversation", entityId: conversation.id, ...actorOf(user), meta: { connectionId } });
+  revalidatePath("/conversations");
+  return { id: conversation.id };
+}
+
 async function getConversationForUser(user: AccessUser, conversationId: string) {
   if (!hasModulePermission(user, "conversations.read")) return null;
   const conversation = await prisma.conversation.findFirst({
