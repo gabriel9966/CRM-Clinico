@@ -1,5 +1,9 @@
 # Disposable PostgreSQL database: never points at the production database.
 services:
+  redis:
+    image: redis:7-alpine
+    tmpfs:
+      - /data
   database:
     image: postgres:16-alpine
     environment:
@@ -41,3 +45,19 @@ services:
       SESSION_SECRET: test-session-secret-not-for-production-use-long-enough
       SMOKE_ARTIFACTS_DIR: /artifacts
     command: ["sh", "-c", "npx prisma migrate deploy && npx playwright install --with-deps chromium && node scripts/smoke.mjs"]
+  worker:
+    build:
+      context: .
+      target: runner
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql://crm_validation:validation_only@database:5432/crm_validation
+      REDIS_URL: redis://redis:6379
+      CONNECTIONS_SECRET: test-connections-secret-not-for-production-use
+      SESSION_SECRET: test-session-secret-not-for-production-use-long-enough
+    entrypoint: ["sh", "-c", "npx prisma migrate deploy && node scripts/worker-smoke.mjs"]
+    command: []
