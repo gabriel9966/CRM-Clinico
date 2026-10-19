@@ -456,6 +456,10 @@ export function ContactsView({
           setTab={setDetailTab}
           onClose={() => setModal(null)}
           onEdit={(c) => setModal({ type: "form", data: c })}
+          onDelete={(c) => {
+            if (!confirm("Mover este contato e seus negócios/agendamentos para a lixeira?")) return;
+            run(() => deleteContact(c.id)).then(() => setModal(null));
+          }}
         />
       )}
     </>
@@ -649,6 +653,7 @@ function ContactDetailModal({
   setTab,
   onClose,
   onEdit,
+  onDelete,
 }: {
   detail: Detail | null | "missing";
   team: TeamMemberDTO[];
@@ -658,6 +663,8 @@ function ContactDetailModal({
   setTab: (t: "perfil" | "negocios" | "conversa" | "atividade") => void;
   onClose: () => void;
   onEdit: (c: ContactDTO) => void;
+  /** Pede confirmação e manda para a lixeira (restaurável). */
+  onDelete: (c: ContactDTO) => void;
 }) {
   if (detail === null || detail === "missing") {
     return (
@@ -709,6 +716,7 @@ function ContactDetailModal({
             <div className="hcompany">{contact.company || contact.email}</div>
           </div>
           <div style={{ flex: 1 }} />
+          <button className="btn small ghost danger" onClick={() => onDelete(contact)} aria-label="Excluir contato"><Icon.trash /> Excluir</button>
           <button className="btn small" onClick={() => onEdit(contact)}>Editar</button>
         </div>
         <div className="tabs">
