@@ -134,10 +134,12 @@ export async function updateTriggerConfig(id: string, triggerConfig: Record<stri
 export async function saveFlow(id: string, flow: Flow, trigger: string, triggerConfig: Record<string, unknown>) {
   const user = await requireAdminUser();
   const { organizationId } = user;
-  validateFlow(flow);
   if (!Object.hasOwn(TRIGGER_LABEL, trigger)) throw new Error("Gatilho inválido");
-  const current = await prisma.automation.findFirst({ where: { id, organizationId }, select: { trigger: true } });
+  const current = await prisma.automation.findFirst({ where: { id, organizationId }, select: { trigger: true, enabled: true } });
   if (!current) throw new Error("Automação não encontrada");
+  // Automação ativa só aceita fluxo completo; senão dava para salvar blocos
+  // soltos numa automação que já está rodando.
+  validateFlow(flow, current.enabled);
   const updated = await prisma.automation.updateMany({
     where: { id, organizationId },
     data: {

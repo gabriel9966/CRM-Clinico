@@ -57,7 +57,7 @@ export async function mcpListContacts(organizationId: string, search?: string) {
     where: {
       organizationId,
       ...(search
-        ? { OR: [{ name: { contains: search } }, { company: { contains: search } }, { email: { contains: search } }] }
+        ? { OR: [{ name: { contains: search, mode: "insensitive" as const } }, { company: { contains: search, mode: "insensitive" as const } }, { email: { contains: search, mode: "insensitive" as const } }, { phone: { contains: search } }] }
         : {}),
     },
     orderBy: { createdAt: "desc" },
@@ -323,13 +323,15 @@ export async function mcpCreateActivity(
     opportunityId: input.opportunityId,
     ownerId: input.assigneeId,
   });
+  const dueAt = new Date(input.dueAt);
+  if (Number.isNaN(dueAt.getTime())) throw new AppError("data_invalida", "informe dueAt em formato ISO 8601", 400);
   const activity = await prisma.activity.create({
     data: {
       organizationId,
       type: input.type ?? "TASK",
       title: input.title,
       notes: input.notes,
-      dueAt: new Date(input.dueAt),
+      dueAt,
       contactId: input.contactId,
       opportunityId: input.opportunityId,
       assigneeId: input.assigneeId,
@@ -378,13 +380,18 @@ export async function mcpCreateAppointment(
   input: { title: string; notes?: string; startAt: string; endAt: string; contactId?: string }
 ) {
   await assertRefs(organizationId, { contactId: input.contactId });
+  const startAt = new Date(input.startAt);
+  const endAt = new Date(input.endAt);
+  if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime()) || endAt <= startAt) {
+    throw new AppError("horario_invalido", "informe startAt e endAt válidos (ISO 8601), com o fim depois do início", 400);
+  }
   const appointment = await prisma.appointment.create({
     data: {
       organizationId,
       title: input.title,
       notes: input.notes,
-      startAt: new Date(input.startAt),
-      endAt: new Date(input.endAt),
+      startAt,
+      endAt,
       contactId: input.contactId,
     },
   });

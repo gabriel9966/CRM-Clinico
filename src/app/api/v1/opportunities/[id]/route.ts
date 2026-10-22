@@ -1,13 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withApiAuth, apiError } from "@/lib/api-auth";
 import { mcpUpdateOpportunity, mcpDeleteOpportunity } from "@/lib/mcp-tools";
+import { currentStageId, stageChangedViaApi } from "@/lib/api-events";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   return withApiAuth(req, async (organizationId) => {
     const { id } = await params;
     const body = await req.json().catch(() => ({}));
+    const before = await currentStageId(organizationId, id);
     const result = await mcpUpdateOpportunity(organizationId, id, body);
     if ("error" in result) return apiError(result.error!, 404);
+    if (before) await stageChangedViaApi(organizationId, id, before);
     return NextResponse.json({ data: result });
   });
 }

@@ -1,10 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { triggerAutomations } from "@/lib/automation/engine";
-import { assignNextOwner } from "@/lib/assignment";
 import { guardWebhook } from "@/lib/webhook-auth";
-import { ensureLiveContact } from "@/lib/inbound";
-import { createMessage } from "@/lib/messages";
+import { resolveInboundContact } from "@/lib/inbound";
+import { createInboundMessage } from "@/lib/messages";
 import { logWebhook } from "@/lib/webhook-log";
 
 // Recebe e-mails inbound da conexão de e-mail do usuário (configurada em
@@ -22,6 +21,9 @@ type EmailWebhookBody = {
   Subject?: string;
   text?: string;
   TextBody?: string;
+  messageId?: string;
+  MessageID?: string;
+  "message-id"?: string;
 };
 
 function pick(...values: (string | undefined)[]): string | null {
@@ -62,35 +64,22 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ con
   const fromAddress = extractEmailAddress(fromRaw);
   const organizationId = connection.organizationId;
 
-  let channel = await prisma.contactChannel.findUnique({
-    where: { connectionId_externalId: { connectionId, externalId: fromAddress } },
-  });
+  const { contactId, created } = await resolveInboundContact({ organizationId, connectionId, externalId: fromAddress, who: { name: fromAddress, email: fromAddress } });
+  // Provedores reenviam o e-mail se o webhook demorar: o Message-ID evita duplicar.
+  const messageId = pick(body.messageId, body.MessageID, body["message-id"]) ?? undefined;
 
-  if (!channel) {
-    const existingContact = await prisma.contact.findFirst({ where: { email: fromAddress, organizationId } });
-    const contact =
-      existingContact ??
-      (await prisma.contact.create({
-        data: { organizationId, name: fromAddress, email: fromAddress, ownerId: await assignNextOwner(organizationId) },
-      }));
-
-    channel = await prisma.contactChannel.create({
-      data: { connectionId, externalId: fromAddress, externalName: fromAddress, contactId: contact.id },
-    });
-  }
-
-  const contactId = await ensureLiveContact(channel, organizationId, { name: fromAddress, email: fromAddress });
-
-  await createMessage(prisma, {
+  const inbound = await createInboundMessage(prisma, {
     organizationId,
     contactId,
     connectionId,
     text: subject ? `${subject}\n\n${text}` : text,
     direction: "in",
     status: "sent",
+    externalMessageId: messageId,
   });
 
-  await triggerAutomations(organizationId, "MESSAGE_RECEIVED", { contactId });
+  if (created) await triggerAutomations(organizationId, "CONTACT_CREATED", { contactId, connectionId });
+  if (!inbound.duplicate) await triggerAutomations(organizationId, "MESSAGE_RECEIVED", { contactId, connectionId, payload: { connectionId, text, messageId } });
   await logWebhook({ organizationId, connectionId, source: "email", event: "inbound", statusCode: 200, payload: body });
 
   return NextResponse.json({ ok: true });

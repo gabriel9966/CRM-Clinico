@@ -92,15 +92,21 @@ async function runActionNode(node: Extract<NodeData, { kind: "action" }>, ctx: R
     }
     case "create_task": {
       if (!ctx.contactId && !ctx.opportunityId) return { ok: false, reason: "sem contato/oportunidade" };
-      const days = Number(config.dueInDays ?? 1);
+      const days = Math.max(0, Math.min(3650, Number(config.dueInDays ?? 1) || 0));
+      // Tarefa sem responsável some para quem só enxerga a própria carteira:
+      // fica com o dono do negócio (ou do contato).
+      const owner = ctx.opportunityId
+        ? await prisma.opportunity.findFirst({ where: { id: ctx.opportunityId, organizationId: orgId }, select: { ownerId: true } })
+        : await prisma.contact.findFirst({ where: { id: ctx.contactId!, organizationId: orgId }, select: { ownerId: true } });
       await prisma.activity.create({
         data: {
           organizationId: orgId,
-          title: String(config.title ?? "Tarefa automática"),
+          title: String(config.title ?? "Tarefa automática").slice(0, 200) || "Tarefa automática",
           type: "TASK",
           dueAt: new Date(Date.now() + days * 86400000),
           contactId: ctx.contactId ?? undefined,
           opportunityId: ctx.opportunityId ?? undefined,
+          assigneeId: owner?.ownerId ?? undefined,
         },
       });
       return { ok: true };
@@ -406,7 +412,7 @@ export async function triggerAutomations(
     // O agente de IA demora (segundos): roda em segundo plano para o webhook do
     // canal responder na hora (senão o provedor reenvia o evento por timeout).
     // O fim (ou a falha) da execução é registrado no histórico da automação.
-    if (flowHasAiAgent(flow)) void execution;
+    if (flowHasAiAgent(flow)) void execution.catch((error) => console.error("[automations] execução em segundo plano falhou:", error));
     else await execution;
   }
 }
@@ -560,18 +566,20 @@ export async function processDueTriggerAutomations() {
     if (automation.lastTriggeredAt && now.getTime() - automation.lastTriggeredAt.getTime() < repeatHours * 3_600_000) continue;
 
     const cutoff = new Date(now.getTime() - inactivityDays * 86_400_000);
-    const contacts = await prisma.contact.findMany({
-      where: {
-        organizationId: automation.organizationId,
-        deletedAt: null,
-        OR: [
-          { lastMessageAt: { lte: cutoff } },
-          { lastMessageAt: null, createdAt: { lte: cutoff } },
-        ],
-      },
-      select: { id: true },
-      take: 2_000,
-    });
+    // Uma vez por período de silêncio: quem já recebeu esta automação desde a
+    // última interação fica de fora. Antes, o mesmo contato parado recebia a
+    // mensagem de novo a cada `repeatHours`, para sempre.
+    const contacts = await prisma.$queryRaw<{ id: string }[]>`
+      SELECT c.id FROM "Contact" c
+      WHERE c."organizationId" = ${automation.organizationId} AND c."deletedAt" IS NULL
+        AND COALESCE(c."lastMessageAt", c."createdAt") <= ${cutoff}
+        AND NOT EXISTS (
+          SELECT 1 FROM "AutomationRun" r
+          WHERE r."automationId" = ${automation.id} AND r."contactId" = c.id
+            AND r."startedAt" >= COALESCE(c."lastMessageAt", c."createdAt")
+        )
+      ORDER BY COALESCE(c."lastMessageAt", c."createdAt") ASC, c.id
+      LIMIT 2000`;
 
     for (const contact of contacts) {
       await triggerAutomations(automation.organizationId, "CONTACT_INACTIVE", {

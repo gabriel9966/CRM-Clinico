@@ -102,8 +102,10 @@ export async function runCode(code: string, ctx: SandboxContext): Promise<Sandbo
   try {
     if (ctx.contactId) contact = await mcpGetContact(ctx.organizationId, ctx.contactId);
     if (ctx.opportunityId) {
-      const opps = await mcpListOpportunities(ctx.organizationId, {});
-      opportunity = opps.find((o) => o.id === ctx.opportunityId) ?? null;
+      // Busca direta: a listagem traz só os 100 negócios mais recentes, e um
+      // negócio antigo chegava ao código como `opportunity = null`.
+      const o = await prisma.opportunity.findFirst({ where: { id: ctx.opportunityId, organizationId: ctx.organizationId }, include: { contact: true, stage: true } });
+      opportunity = o ? { id: o.id, title: o.title, value: o.value, contact: o.contact.name, stage: o.stage.label, ownerId: o.ownerId } : null;
     }
   } catch {
     // segue sem os dados resolvidos se a busca falhar

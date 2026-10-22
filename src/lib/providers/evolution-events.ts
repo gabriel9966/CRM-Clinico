@@ -21,17 +21,24 @@ export function parseEvolutionEvent(input: unknown) {
   if (!["messages.upsert", "message", "sendmessage"].includes(event)) return { kind: "ignored" as const };
   const info = obj(data.Info);
   const key = obj(data.key);
-  const jid = str(key.remoteJid || info.Chat);
-  if (!/^\d+(?::\d+)?@(s\.whatsapp\.net|c\.us)$/.test(jid)) return { kind: "ignored" as const };
+  const fromMe = key.fromMe === true || info.IsFromMe === true || event === "sendmessage";
+  let jid = str(key.remoteJid || info.Chat);
+  // Endereçamento por LID ("123@lid"): o WhatsApp esconde o número e manda o
+  // telefone num campo alternativo (Evolution v2: remoteJidAlt/senderPn;
+  // Evolution GO: SenderAlt na recebida, RecipientAlt na enviada).
+  if (jid.endsWith("@lid")) jid = str(key.remoteJidAlt || key.senderPn || (fromMe ? info.RecipientAlt : info.SenderAlt));
+  if (!/^\d+(?::\d+)?@(s\.whatsapp\.net|c\.us)$/.test(jid)) {
+    return { kind: "ignored" as const, reason: info.IsGroup === true || /@g\.us$/.test(str(key.remoteJid || info.Chat)) ? "grupo" : "contato sem número (LID sem telefone alternativo)" };
+  }
   let message = obj(data.message || data.Message);
   const wrapped = obj(obj(message.ephemeralMessage).message || obj(message.viewOnceMessage).message);
   if (Object.keys(wrapped).length) message = wrapped;
   const text = str(message.conversation || obj(message.extendedTextMessage).text);
-  if (!text) return { kind: "ignored" as const };
+  if (!text) return { kind: "ignored" as const, reason: "mensagem sem texto (mídia, figurinha ou reação)" };
   const timestamp = data.messageTimestamp || info.Timestamp;
   const time = typeof timestamp === "number" || typeof timestamp === "string" && /^\d+$/.test(timestamp) ? new Date(Number(timestamp) * 1000) : new Date(str(timestamp));
   return { kind: "message" as const, jid: jid.replace(/:\d+@/, "@"), text,
-    fromMe: key.fromMe === true || info.IsFromMe === true || event === "sendmessage",
+    fromMe,
     id: str(key.id || info.ID) || undefined, name: str(data.pushName || info.PushName),
     time: Number.isFinite(time.getTime()) ? time : new Date(),
   };

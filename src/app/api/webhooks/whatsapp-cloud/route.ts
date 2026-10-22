@@ -2,12 +2,11 @@ import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { decryptJson } from "@/lib/crypto";
 import { verifyMetaSignature } from "@/lib/webhook-auth";
-import { assignNextOwner } from "@/lib/assignment";
 import { createInboundMessage } from "@/lib/messages";
 import { triggerAutomations } from "@/lib/automation/engine";
 import { logWebhook } from "@/lib/webhook-log";
 import { markCampaignDelivery, markCampaignResponse } from "@/lib/campaigns";
-import { ensureLiveContact } from "@/lib/inbound";
+import { resolveInboundContact } from "@/lib/inbound";
 import { clientIp } from "@/lib/rate-limit";
 import { sharedRateLimit } from "@/lib/shared-rate-limit";
 
@@ -45,14 +44,9 @@ export async function POST(req: NextRequest) {
       const text = incoming.text?.body;
       if (!externalId || !text) continue;
       const profile = value?.contacts?.find((contact) => contact.wa_id === externalId)?.profile?.name || `WhatsApp ${externalId.slice(-4)}`;
-      let channel = await prisma.contactChannel.findUnique({ where: { connectionId_externalId: { connectionId: connection.id, externalId } }, include: { contact: true } });
-      if (!channel) {
-        const contact = await prisma.contact.create({ data: { organizationId: connection.organizationId, name: profile, phone: `+${externalId}`, ownerId: await assignNextOwner(connection.organizationId) } });
-        channel = await prisma.contactChannel.create({ data: { connectionId: connection.id, externalId, externalName: profile, contactId: contact.id }, include: { contact: true } });
-      }
-      // Contato apagado (lixeira) que volta a escrever: a mensagem vai para um contato ativo.
-      const contactId = await ensureLiveContact(channel, connection.organizationId, { name: profile, phone: `+${externalId}` });
+      const { contactId, created } = await resolveInboundContact({ organizationId: connection.organizationId, connectionId: connection.id, externalId, who: { name: profile, phone: `+${externalId}` } });
       const inbound = await createInboundMessage(prisma, { organizationId: connection.organizationId, contactId, connectionId: connection.id, text, direction: "in", time: incoming.timestamp ? new Date(Number(incoming.timestamp) * 1000) : new Date(), status: "sent", externalMessageId: incoming.id });
+      if (created) await triggerAutomations(connection.organizationId, "CONTACT_CREATED", { contactId, connectionId: connection.id });
       if (!inbound.duplicate) {
         await triggerAutomations(connection.organizationId, "MESSAGE_RECEIVED", { contactId, connectionId: connection.id, payload: { connectionId: connection.id, text, messageId: incoming.id } });
         await markCampaignResponse(connection.organizationId, contactId, connection.id);

@@ -5,6 +5,11 @@ import { assignNextOwner } from "@/lib/assignment";
 import { syncTags } from "@/lib/crm-catalog";
 import { triggerAutomations } from "@/lib/automation/engine";
 import { logWebhook } from "@/lib/webhook-log";
+import { findContactByPhone } from "@/lib/inbound";
+
+function parseTags(raw: string): string[] {
+  try { const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+}
 
 function valueAt(payload: unknown, path: string): unknown {
   if (!path.trim()) return undefined;
@@ -28,13 +33,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ web
   const company = text(valueAt(payload, mapping.company || "company")) || null;
   const rawTags = valueAt(payload, mapping.tags || "tags");
   const tags = Array.isArray(rawTags) ? rawTags.map(text).filter(Boolean) : text(rawTags).split(",").map((tag) => tag.trim()).filter(Boolean);
-  const existing = await prisma.contact.findFirst({ where: { organizationId: webhook.organizationId, OR: [...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])] } });
+  // Mesmo lead reenviado pelo formulário: casa por e-mail (sem diferenciar
+  // maiúsculas) ou telefone em qualquer formatação.
+  const byEmail = email ? await prisma.contact.findFirst({ where: { organizationId: webhook.organizationId, email: { equals: email, mode: "insensitive" } }, select: { id: true } }) : null;
+  const match = byEmail ?? (phone ? await findContactByPhone(webhook.organizationId, phone) : null);
+  const existing = match ? await prisma.contact.findFirst({ where: { id: match.id, organizationId: webhook.organizationId } }) : null;
   await syncTags(webhook.organizationId, tags, "contact");
+  const previousTags = existing ? parseTags(existing.tags) : [];
   const contact = existing
-    ? await prisma.contact.update({ where: { id: existing.id }, data: { name: existing.name === "Novo lead" ? name : existing.name, company: existing.company || company, email: existing.email || email, phone: existing.phone || phone, tags: JSON.stringify([...new Set([...JSON.parse(existing.tags || "[]"), ...tags])]) } })
+    ? await prisma.contact.update({ where: { id: existing.id }, data: { name: existing.name === "Novo lead" ? name : existing.name, company: existing.company || company, email: existing.email || email, phone: existing.phone || phone, tags: JSON.stringify([...new Set([...previousTags, ...tags])]) } })
     : await prisma.contact.create({ data: { organizationId: webhook.organizationId, name, phone, email, company, tags: JSON.stringify(tags), ownerId: await assignNextOwner(webhook.organizationId) } });
-  if (!existing) await triggerAutomations(webhook.organizationId, "CONTACT_CREATED", { contactId: contact.id });
-  for (const tag of tags) await triggerAutomations(webhook.organizationId, "TAG_ADDED", { contactId: contact.id, tag });
+  if (!existing) await triggerAutomations(webhook.organizationId, "CONTACT_CREATED", { contactId: contact.id, payload });
+  // "Tag adicionada" só para tags que o contato ainda não tinha.
+  for (const tag of new Set(tags)) if (!previousTags.includes(tag)) await triggerAutomations(webhook.organizationId, "TAG_ADDED", { contactId: contact.id, tag });
   await logWebhook({ organizationId: webhook.organizationId, source: "inbound-form", event: webhook.name, statusCode: 200, detail: existing ? "Contato atualizado" : "Lead criado", payload });
   return NextResponse.json({ ok: true, contactId: contact.id, created: !existing });
 }

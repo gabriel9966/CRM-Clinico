@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withApiAuth, apiError } from "@/lib/api-auth";
 import { mcpListOpportunities, mcpCreateOpportunity } from "@/lib/mcp-tools";
+import { opportunityCreatedViaApi } from "@/lib/api-events";
 
 export async function GET(req: NextRequest) {
   return withApiAuth(req, async (organizationId) => {
@@ -22,6 +23,7 @@ export async function POST(req: NextRequest) {
     }
     const result = await mcpCreateOpportunity(organizationId, body);
     if ("error" in result) return apiError(result.error!, 404);
+    await opportunityCreatedViaApi(organizationId, result.id);
     return NextResponse.json({ data: result }, { status: 201 });
   });
 }

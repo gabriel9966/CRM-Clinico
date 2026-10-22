@@ -18,11 +18,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ aut
     return NextResponse.json({ ok: false, error: "token_required" }, { status: 401 });
   }
 
+  // Lê o corpo uma vez: depois de um req.json() que falha, o corpo já foi
+  // consumido e um texto/formulário chegava ao fluxo como null.
+  const raw = await req.text().catch(() => "");
+  if (raw.length > 512_000) return NextResponse.json({ ok: false, error: "payload_too_large" }, { status: 413 });
   let payload: unknown = null;
-  try {
-    payload = await req.json();
-  } catch {
-    payload = await req.text().catch(() => null);
+  if (raw) {
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      payload = req.headers.get("content-type")?.includes("application/x-www-form-urlencoded") ? Object.fromEntries(new URLSearchParams(raw)) : raw;
+    }
   }
 
   const result = await runAutomationById(automationId, payload);

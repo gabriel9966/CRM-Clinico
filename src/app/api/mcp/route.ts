@@ -18,6 +18,7 @@ import { clientIp } from "@/lib/rate-limit";
 import { sharedRateLimit } from "@/lib/shared-rate-limit";
 import { listProfessionals, listProcedures } from "@/lib/scheduling/catalog";
 import { AppError } from "@/lib/errors";
+import { contactCreatedViaApi, currentStageId, opportunityCreatedViaApi, stageChangedViaApi } from "@/lib/api-events";
 import {
   getAvailability,
   bookAppointment,
@@ -52,7 +53,7 @@ function buildServer(organizationId: string) {
       description: "Lista contatos do CRM, com busca opcional por nome, empresa ou e-mail.",
       inputSchema: { search: z.string().optional() },
     },
-    async ({ search }) => text(await mcpListContacts(organizationId, search))
+    async ({ search }) => run(() => mcpListContacts(organizationId, search))
   );
 
   server.registerTool(
@@ -62,7 +63,7 @@ function buildServer(organizationId: string) {
       description: "Retorna um contato com suas oportunidades e mensagens recentes.",
       inputSchema: { contactId: z.string() },
     },
-    async ({ contactId }) => text(await mcpGetContact(organizationId, contactId))
+    async ({ contactId }) => run(() => mcpGetContact(organizationId, contactId))
   );
 
   server.registerTool(
@@ -80,7 +81,12 @@ function buildServer(organizationId: string) {
         ownerId: z.string().optional(),
       },
     },
-    async (input) => text(await mcpCreateContact(organizationId, input))
+    async (input) =>
+      run(async () => {
+        const created = await mcpCreateContact(organizationId, input);
+        await contactCreatedViaApi(organizationId, created.id, input.tags);
+        return created;
+      })
   );
 
   server.registerTool(
@@ -90,7 +96,7 @@ function buildServer(organizationId: string) {
       description: "Lista os pipelines de vendas e suas etapas.",
       inputSchema: {},
     },
-    async () => text(await mcpListPipelines(organizationId))
+    async () => run(() => mcpListPipelines(organizationId))
   );
 
   server.registerTool(
@@ -104,7 +110,7 @@ function buildServer(organizationId: string) {
         contactId: z.string().optional(),
       },
     },
-    async (filter) => text(await mcpListOpportunities(organizationId, filter))
+    async (filter) => run(() => mcpListOpportunities(organizationId, filter))
   );
 
   server.registerTool(
@@ -121,7 +127,12 @@ function buildServer(organizationId: string) {
         ownerId: z.string().optional(),
       },
     },
-    async (input) => text(await mcpCreateOpportunity(organizationId, input))
+    async (input) =>
+      run(async () => {
+        const created = await mcpCreateOpportunity(organizationId, input);
+        if ("id" in created && created.id) await opportunityCreatedViaApi(organizationId, created.id);
+        return created;
+      })
   );
 
   server.registerTool(
@@ -131,7 +142,13 @@ function buildServer(organizationId: string) {
       description: "Move uma oportunidade para outra etapa do pipeline.",
       inputSchema: { opportunityId: z.string(), stageId: z.string() },
     },
-    async ({ opportunityId, stageId }) => text(await mcpMoveOpportunityStage(organizationId, opportunityId, stageId))
+    async ({ opportunityId, stageId }) =>
+      run(async () => {
+        const before = await currentStageId(organizationId, opportunityId);
+        const moved = await mcpMoveOpportunityStage(organizationId, opportunityId, stageId);
+        if (moved.ok && before) await stageChangedViaApi(organizationId, opportunityId, before);
+        return moved;
+      })
   );
 
   server.registerTool(
@@ -141,7 +158,7 @@ function buildServer(organizationId: string) {
       description: "Lista os membros da equipe (atendentes) do CRM.",
       inputSchema: {},
     },
-    async () => text(await mcpListTeam(organizationId))
+    async () => run(() => mcpListTeam(organizationId))
   );
 
   server.registerTool(
@@ -152,7 +169,7 @@ function buildServer(organizationId: string) {
         "Envia uma mensagem para um contato por um canal real (WhatsApp, Instagram ou e-mail). Sem canal conectado devolve o motivo (sem_canal, canal_desconectado, escolha_canal…) e NÃO registra nada como enviado. Se o contato puder ser atendido por mais de um canal, informe connectionId.",
       inputSchema: { contactId: z.string(), text: z.string(), connectionId: z.string().optional() },
     },
-    async ({ contactId, text: msg, connectionId }) => text(await mcpSendMessage(organizationId, contactId, msg, connectionId))
+    async ({ contactId, text: msg, connectionId }) => run(() => mcpSendMessage(organizationId, contactId, msg, connectionId))
   );
 
   // ── Agenda clínica ───────────────────────────────────────────────────────
@@ -163,7 +180,7 @@ function buildServer(organizationId: string) {
       description: "Lista os profissionais que atendem (id, nome, especialidade, dias e horário de trabalho).",
       inputSchema: {},
     },
-    async () => text(await listProfessionals(organizationId))
+    async () => run(() => listProfessionals(organizationId))
   );
 
   server.registerTool(
@@ -173,7 +190,7 @@ function buildServer(organizationId: string) {
       description: "Lista o catálogo de procedimentos com duração (min) e preço (centavos).",
       inputSchema: {},
     },
-    async () => text(await listProcedures(organizationId))
+    async () => run(() => listProcedures(organizationId))
   );
 
   server.registerTool(
@@ -191,7 +208,7 @@ function buildServer(organizationId: string) {
         limit: z.number().int().optional(),
       },
     },
-    async (input) => schedulingResult(() => getAvailability(organizationId, input))
+    async (input) => run(() => getAvailability(organizationId, input))
   );
 
   server.registerTool(
@@ -215,7 +232,7 @@ function buildServer(organizationId: string) {
       },
     },
     async (input) =>
-      schedulingResult(() => bookAppointment(organizationId, { ...input, bookingChannel: "mcp" }))
+      run(() => bookAppointment(organizationId, { ...input, bookingChannel: "mcp" }))
   );
 
   server.registerTool(
@@ -226,7 +243,7 @@ function buildServer(organizationId: string) {
       inputSchema: { appointmentId: z.string(), startAt: z.string(), professionalId: z.string().optional() },
     },
     async ({ appointmentId, ...rest }) =>
-      schedulingResult(() => rescheduleAppointment(organizationId, appointmentId, rest))
+      run(() => rescheduleAppointment(organizationId, appointmentId, rest))
   );
 
   server.registerTool(
@@ -237,22 +254,27 @@ function buildServer(organizationId: string) {
       inputSchema: { appointmentId: z.string(), reason: z.string().optional() },
     },
     async ({ appointmentId, reason }) =>
-      schedulingResult(() => cancelAppointment(organizationId, appointmentId, { reason }))
+      run(() => cancelAppointment(organizationId, appointmentId, { reason }))
   );
 
   return server;
 }
 
-// Erros de regra da agenda voltam como resultado de ferramenta (isError) com
-// código estável, para o agente conseguir se corrigir (ex.: oferecer outro horário).
-async function schedulingResult(fn: () => Promise<unknown>) {
+// Toda ferramenta passa por aqui. Erro de regra (AppError, ou { error } /
+// { ok: false } devolvido pela função) volta como resultado com isError e
+// código estável, para o agente conseguir se corrigir (ex.: oferecer outro
+// horário). Erro inesperado vira "erro_interno" sem detalhes do banco.
+async function run(fn: () => Promise<unknown>) {
   try {
-    return text(await fn());
+    const result = await fn();
+    const failed = result === null || (typeof result === "object" && (("error" in result && (result as { error?: unknown }).error) || (result as { ok?: unknown }).ok === false));
+    return failed ? { isError: true, ...text(result ?? { error: "nao_encontrado" }) } : text(result);
   } catch (err) {
     if (err instanceof AppError) {
       return { isError: true, ...text({ error: err.code, detail: err.message }) };
     }
-    throw err;
+    console.error("[mcp] erro na ferramenta:", err);
+    return { isError: true, ...text({ error: "erro_interno", detail: "Não foi possível concluir a operação." }) };
   }
 }
 

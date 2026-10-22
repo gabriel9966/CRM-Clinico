@@ -2,12 +2,11 @@ import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { decryptJson } from "@/lib/crypto";
 import { triggerAutomations } from "@/lib/automation/engine";
-import { assignNextOwner } from "@/lib/assignment";
 import { clientIp } from "@/lib/rate-limit";
 import { sharedRateLimit } from "@/lib/shared-rate-limit";
 import { verifyMetaSignature } from "@/lib/webhook-auth";
-import { ensureLiveContact } from "@/lib/inbound";
-import { createMessage } from "@/lib/messages";
+import { resolveInboundContact } from "@/lib/inbound";
+import { createInboundMessage } from "@/lib/messages";
 import { logWebhook } from "@/lib/webhook-log";
 
 // Webhook único para todas as conexões de Instagram (a Meta exige uma URL fixa
@@ -34,7 +33,7 @@ type InstagramWebhookBody = {
     messaging?: Array<{
       sender?: { id?: string };
       recipient?: { id?: string };
-      message?: { text?: string; is_echo?: boolean };
+      message?: { mid?: string; text?: string; is_echo?: boolean };
       timestamp?: number;
     }>;
   }>;
@@ -83,21 +82,17 @@ export async function POST(req: NextRequest) {
 
     const organizationId = connection.organizationId;
 
-    let channel = await prisma.contactChannel.findUnique({
-      where: { connectionId_externalId: { connectionId: connection.id, externalId } },
+    // O IGSID não traz telefone/e-mail: não há como casar com contato existente.
+    const { contactId, created } = await resolveInboundContact({
+      organizationId,
+      connectionId: connection.id,
+      externalId,
+      who: { name: `Instagram ${externalId.slice(-6)}` },
+      match: false,
     });
-    if (!channel) {
-      const contact = await prisma.contact.create({
-        data: { organizationId, name: `Instagram ${externalId.slice(-6)}`, ownerId: await assignNextOwner(organizationId) },
-      });
-      channel = await prisma.contactChannel.create({
-        data: { connectionId: connection.id, externalId, contactId: contact.id },
-      });
-    }
 
-    const contactId = await ensureLiveContact(channel, organizationId, { name: `Instagram ${externalId.slice(-6)}` });
-
-    await createMessage(prisma, {
+    // A Meta reenvia o evento se não responder a tempo: o mid evita duplicar.
+    const inbound = await createInboundMessage(prisma, {
       organizationId,
       contactId,
       connectionId: connection.id,
@@ -105,10 +100,12 @@ export async function POST(req: NextRequest) {
       direction: isEcho ? "out" : "in",
       time: event.timestamp ? new Date(event.timestamp) : new Date(),
       status: "sent",
+      externalMessageId: event.message?.mid,
     });
 
-    if (!isEcho) {
-      await triggerAutomations(organizationId, "MESSAGE_RECEIVED", { contactId });
+    if (created) await triggerAutomations(organizationId, "CONTACT_CREATED", { contactId, connectionId: connection.id });
+    if (!isEcho && !inbound.duplicate) {
+      await triggerAutomations(organizationId, "MESSAGE_RECEIVED", { contactId, connectionId: connection.id, payload: { connectionId: connection.id, text, messageId: event.message?.mid } });
     }
     await logWebhook({ organizationId, connectionId: connection.id, source: "instagram", event: "messaging", statusCode: 200, payload: event });
   }

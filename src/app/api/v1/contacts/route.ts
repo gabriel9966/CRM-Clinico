@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withApiAuth, apiError } from "@/lib/api-auth";
 import { mcpListContacts, mcpCreateContact } from "@/lib/mcp-tools";
+import { contactCreatedViaApi } from "@/lib/api-events";
 
 export async function GET(req: NextRequest) {
   return withApiAuth(req, async (organizationId) => {
@@ -15,6 +16,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => null);
     if (!body?.name) return apiError("campo obrigatório: name", 400);
     const contact = await mcpCreateContact(organizationId, body);
+    await contactCreatedViaApi(organizationId, contact.id, Array.isArray(body.tags) ? body.tags : []);
     return NextResponse.json({ data: contact }, { status: 201 });
   });
 }

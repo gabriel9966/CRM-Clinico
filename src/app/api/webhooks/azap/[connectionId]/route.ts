@@ -1,12 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { guardWebhook } from "@/lib/webhook-auth";
-import { assignNextOwner } from "@/lib/assignment";
 import { createInboundMessage } from "@/lib/messages";
 import { triggerAutomations } from "@/lib/automation/engine";
 import { logWebhook } from "@/lib/webhook-log";
 import { markCampaignResponse } from "@/lib/campaigns";
-import { ensureLiveContact } from "@/lib/inbound";
+import { resolveInboundContact } from "@/lib/inbound";
 
 // Normaliza os formatos mais comuns de gateways compatíveis com AZAP. Caso a
 // conta entregue outro JSON, ele continua registrado no log para configurar o
@@ -29,15 +28,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ con
     return NextResponse.json({ ok: true, ignored: true });
   }
   const externalId = phone.replace(/^\+/, "").replace(/@.+$/, "");
-  let channel = await prisma.contactChannel.findUnique({ where: { connectionId_externalId: { connectionId, externalId } }, include: { contact: true } });
-  if (!channel) {
-    const contact = await prisma.contact.create({ data: { organizationId: connection.organizationId, name: `WhatsApp ${externalId.slice(-4)}`, phone: `+${externalId}`, ownerId: await assignNextOwner(connection.organizationId) } });
-    channel = await prisma.contactChannel.create({ data: { connectionId, externalId, externalName: contact.name, contactId: contact.id }, include: { contact: true } });
-  }
-  // Contato apagado (lixeira) que volta a escrever: a mensagem vai para um contato ativo.
-  const contactId = await ensureLiveContact(channel, connection.organizationId, { name: `WhatsApp ${externalId.slice(-4)}`, phone: `+${externalId}` });
+  const name = pick(body, ["pushName", "name", "senderName"]) || `WhatsApp ${externalId.slice(-4)}`;
+  const { contactId, created } = await resolveInboundContact({ organizationId: connection.organizationId, connectionId, externalId, who: { name, phone: `+${externalId}` } });
   const messageId = pick(body, ["messageId", "message_id", "id"]);
   const inbound = await createInboundMessage(prisma, { organizationId: connection.organizationId, contactId, connectionId, text, direction: "in", status: "sent", externalMessageId: messageId });
+  if (created) await triggerAutomations(connection.organizationId, "CONTACT_CREATED", { contactId, connectionId });
   if (!inbound.duplicate) {
     await triggerAutomations(connection.organizationId, "MESSAGE_RECEIVED", { contactId, connectionId, payload: { connectionId, text, messageId } });
     await markCampaignResponse(connection.organizationId, contactId, connectionId);

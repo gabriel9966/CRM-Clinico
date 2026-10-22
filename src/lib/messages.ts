@@ -28,16 +28,28 @@ export async function createMessage(db: DbClient, data: Prisma.MessageUncheckedC
       conversationId = existing.id;
     } else {
       const contact = await db.contact.findFirst({ where: { id: data.contactId, organizationId: data.organizationId }, select: { ownerId: true } });
-      const conversation = await db.conversation.create({
-        data: {
-          organizationId: data.organizationId,
-          contactId: data.contactId,
-          connectionId: data.connectionId ?? null,
-          ownerId: contact?.ownerId ?? null,
-        },
-        select: { id: true },
-      });
-      conversationId = conversation.id;
+      try {
+        const conversation = await db.conversation.create({
+          data: {
+            organizationId: data.organizationId,
+            contactId: data.contactId,
+            connectionId: data.connectionId ?? null,
+            ownerId: contact?.ownerId ?? null,
+          },
+          select: { id: true },
+        });
+        conversationId = conversation.id;
+      } catch (error) {
+        // "oi" e "tudo bem?" chegam juntos: a outra mensagem abriu o atendimento
+        // primeiro (índice único contato+canal). Usa o dela.
+        if ((error as { code?: string })?.code !== "P2002") throw error;
+        const winner = await db.conversation.findFirst({
+          where: { organizationId: data.organizationId, contactId: data.contactId, connectionId: data.connectionId ?? null },
+          select: { id: true },
+        });
+        if (!winner) throw error;
+        conversationId = winner.id;
+      }
     }
   }
   const message = await db.message.create({ data: { ...data, conversationId } });
