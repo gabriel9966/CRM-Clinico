@@ -7,7 +7,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY package.json package-lock.json* ./
 COPY prisma ./prisma
 COPY prisma.config.ts ./
-RUN npm install
+# npm ci: instala exatamente o package-lock (build reproduzível).
+RUN npm ci
 ENV DATABASE_URL="postgresql://postgres:placeholder@localhost:5432/postgres"
 RUN npx prisma generate
 
@@ -36,7 +37,8 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 
 COPY --from=deps /app/node_modules ./node_modules
-COPY --from=builder /app/.next ./.next
+# .next do usuário node: o next start grava cache em .next/cache.
+COPY --from=builder --chown=node:node /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/prisma.config.ts ./
@@ -46,6 +48,9 @@ COPY --from=builder /app/tsconfig.json ./
 COPY --from=builder /app/scripts ./scripts
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x ./docker-entrypoint.sh
+
+# Sem root: uma falha no app não vira controle do container.
+USER node
 
 EXPOSE 3000
 ENTRYPOINT ["./docker-entrypoint.sh"]

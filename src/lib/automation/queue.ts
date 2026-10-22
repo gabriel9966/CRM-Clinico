@@ -17,13 +17,16 @@ let connection: IORedis | null = null;
 let queue: Queue | null = null;
 let worker: Worker | null = null;
 let redisAvailable = false;
+let connectedOnce = false;
 
 function getConnection(): IORedis {
   if (!connection) {
     connection = new IORedis(REDIS_URL, {
       maxRetriesPerRequest: null,
       lazyConnect: true,
-      retryStrategy: () => null, // não fica tentando reconectar sem parar se não existir
+      // Sem Redis na partida: desiste logo (modo de segurança). Se já conectou
+      // antes, reconecta — um reinício do Redis não pode matar a fila de vez.
+      retryStrategy: (times) => (connectedOnce ? Math.min(times * 500, 5_000) : null),
     });
     connection.on("error", () => {
       // silencioso de propósito — o estado "disponível" é controlado por initQueue()
@@ -36,6 +39,7 @@ export async function initQueue(options: { worker?: boolean } = {}) {
   try {
     const conn = getConnection();
     await conn.connect();
+    connectedOnce = true;
     queue = new Queue(QUEUE_NAME, { connection: conn });
     if (options.worker !== false) worker = new Worker(
       QUEUE_NAME,
@@ -63,11 +67,25 @@ export async function initQueue(options: { worker?: boolean } = {}) {
 // Agenda a retomada de um AutomationRun daqui a `delayMs`. Retorna o id do
 // job na fila, ou null se caiu no modo de segurança (sem Redis).
 export async function scheduleResume(runId: string, delayMs: number): Promise<string | null> {
-  if (redisAvailable && queue) {
-    const job = await queue.add("resume", { runId }, { delay: delayMs, jobId: runId });
-    return job.id ?? null;
+  // Redis caído no meio do caminho: devolve null e o agendamento fica só no
+  // banco (o ticker de segurança retoma), em vez de travar a automação.
+  if (redisAvailable && queue && connection?.status === "ready") {
+    try {
+      const job = await queue.add("resume", { runId }, { delay: delayMs, jobId: runId });
+      return job.id ?? null;
+    } catch (err) {
+      console.error("[automations] falha ao enfileirar retomada, usando o banco:", err);
+    }
   }
   return null;
+}
+
+// Desligamento limpo (SIGTERM no deploy): o worker termina o job em andamento
+// em vez de abandoná-lo, o que faria o BullMQ reexecutá-lo depois.
+export async function closeQueue() {
+  await worker?.close().catch(() => {});
+  await queue?.close().catch(() => {});
+  connection?.disconnect();
 }
 
 export async function cancelScheduledResume(jobId: string | null) {
