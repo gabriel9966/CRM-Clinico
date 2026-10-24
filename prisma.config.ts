@@ -9,7 +9,8 @@ try {
 export default defineConfig({
   schema: "prisma/schema.prisma",
   datasource: {
-    url: env("DATABASE_URL"),
+    // CLI de migrations usa uma credencial administrativa separada; o app usa DATABASE_URL.
+    url: process.env.DATABASE_MIGRATION_URL || env("DATABASE_URL"),
   },
   migrations: {
     seed: "tsx prisma/seed.ts",

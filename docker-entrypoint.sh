@@ -24,8 +24,10 @@ else
   fi
 fi
 
-echo "[entrypoint] rodando seed (só popula se o banco estiver vazio)..."
-npx tsx prisma/seed.ts || echo "[entrypoint] seed falhou ou já populado, seguindo..."
+# O segredo administrativo fica somente no processo de migrations, nunca no app.
+unset DATABASE_MIGRATION_URL
+
+echo "[entrypoint] seed de demonstração não roda automaticamente em produção."
 
 echo "[entrypoint] subindo a aplicação..."
 exec "$@"

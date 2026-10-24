@@ -41,8 +41,28 @@ npx prisma migrate deploy
 ```
 
 - `0_init` é o *baseline*: reproduz o schema de bancos criados antes das migrations. O entrypoint do Docker marca essa migration como aplicada em bancos que já existiam e aplica o resto. Se a migration falhar, **a aplicação não sobe** (nada é alterado às cegas).
+- Prisma Migrate usa `DATABASE_MIGRATION_URL` quando configurada; `DATABASE_URL` é a credencial de runtime. Em produção, mantenha a credencial administrativa apenas em `DATABASE_MIGRATION_URL`.
 - Faça backup antes de migrations em produção.
 - Para conferir que o banco e o schema estão iguais: `npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code`.
+
+## Preparação de produção
+
+O container aplica migrations com `DATABASE_MIGRATION_URL` e executa a aplicação com `DATABASE_URL`. Configure a primeira com uma credencial administrativa mantida no gerenciador de segredos. Configure `DATABASE_URL` com um login PostgreSQL restrito que herde apenas a role `novacrm_app`. A policy `crm_server_only` dá acesso amplo à role interna; o isolamento entre clínicas continua dependendo dos filtros `organizationId` na aplicação.
+
+Na primeira implantação, aplique as migrations antes de iniciar o app (`docker compose run --rm app sh -c 'true'`). Depois da migration `20261022000100_lock_down_app_role`, crie o login de runtime uma vez usando uma sessão administrativa do PostgreSQL (substitua a senha por um segredo forte, sem colocá-la no histórico do shell):
+
+```sql
+CREATE ROLE novacrm_runtime LOGIN INHERIT PASSWORD 'SEGREDO_FORTE' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+GRANT novacrm_app TO novacrm_runtime;
+```
+
+Use `novacrm_runtime` em `DATABASE_URL`; mantenha a credencial administrativa somente em `DATABASE_MIGRATION_URL`. O entrypoint remove `DATABASE_MIGRATION_URL` antes de iniciar o servidor, e o worker também não recebe essa credencial. Se o ambiente ainda não tiver usuários, crie o primeiro administrador explicitamente, com `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD` (mínimo 16 caracteres) e `BOOTSTRAP_ORG_NAME` injetados somente para esse comando:
+
+```bash
+docker compose exec -e BOOTSTRAP_ADMIN_EMAIL -e BOOTSTRAP_ADMIN_PASSWORD -e BOOTSTRAP_ORG_NAME app npx tsx prisma/bootstrap-admin.ts
+```
+
+O bootstrap recusa qualquer banco que já tenha um usuário. O seed de demonstração é apenas para desenvolvimento e não roda no container de produção.
 
 ## Testes
 

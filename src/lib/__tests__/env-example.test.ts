@@ -24,7 +24,7 @@ describe(".env.production.example", () => {
 
   it("existe e documenta as variáveis obrigatórias", () => {
     expect(existsSync(file)).toBe(true);
-    for (const key of ["DATABASE_URL", "SESSION_SECRET", "CONNECTIONS_SECRET", "APP_BASE_URL"]) {
+    for (const key of ["DATABASE_URL", "DATABASE_MIGRATION_URL", "SESSION_SECRET", "CONNECTIONS_SECRET", "APP_BASE_URL"]) {
       expect(env, key).toHaveProperty(key);
     }
   });
@@ -40,6 +40,7 @@ describe(".env.production.example", () => {
 
   it("DATABASE_URL não traz senha de verdade", () => {
     expect(env.DATABASE_URL).toMatch(/USUARIO:SENHA@/);
+    expect(env.DATABASE_MIGRATION_URL).toMatch(/USUARIO:SENHA@/);
   });
 
   it("nenhum valor longo e aleatório (estilo segredo) em qualquer variável", () => {

@@ -44,6 +44,15 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("barreira de acesso do PostgreSQ
     }
   });
 
+  it("mantém a role de acesso sem login e sem capacidades de bypass", async () => {
+    const { rows } = await pool.query<{ rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean; rolcreatedb: boolean; rolcreaterole: boolean }>(`
+      SELECT rolcanlogin, rolsuper, rolbypassrls, rolcreatedb, rolcreaterole
+      FROM pg_roles WHERE rolname = 'novacrm_app'
+    `);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toEqual({ rolcanlogin: false, rolsuper: false, rolbypassrls: false, rolcreatedb: false, rolcreaterole: false });
+  });
+
   it("não concede acesso REST às roles Supabase quando elas existem", async () => {
     const { rows } = await pool.query<{ role_name: string; granted_tables: number }>(`
       SELECT r.rolname AS role_name,

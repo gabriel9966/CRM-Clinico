@@ -29,6 +29,9 @@ const DEFAULT_STAGES = [
 ];
 
 async function main() {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("O seed de demonstração é proibido em produção; use prisma/bootstrap-admin.ts.");
+  }
   const existing = await prisma.user.count();
   if (existing > 0) {
     console.log("Banco já populado, pulando seed.");
